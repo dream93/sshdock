@@ -83,14 +83,11 @@ select {
 }
 
 .brand-mark {
-  display: grid;
   width: 42px;
   height: 42px;
-  place-items: center;
-  border-radius: 8px;
-  background: var(--accent);
-  color: var(--accent-text);
-  font-weight: 800;
+  flex: none;
+  border-radius: 10px;
+  object-fit: cover;
 }
 
 h1,
@@ -161,10 +158,29 @@ h1 {
   background: var(--app-bg);
 }
 
+.workspace.terminal-focused {
+  grid-template-rows: 1fr;
+}
+
+.workspace.terminal-focused .config-panel {
+  display: none;
+}
+
 .config-panel {
   padding: 22px 26px;
   border-bottom: 1px solid var(--border);
   background: var(--panel-bg);
+}
+
+.sidebar-action {
+  width: 100%;
+  flex: none;
+}
+
+.sidebar-action.active,
+.sidebar-action:hover {
+  border-color: var(--accent);
+  background: var(--control-hover);
 }
 
 .panel-heading {
@@ -180,6 +196,12 @@ h1 {
   grid-template-columns: repeat(12, minmax(0, 1fr));
   gap: 14px;
   align-items: end;
+}
+
+.settings-form {
+  display: grid;
+  max-width: 420px;
+  gap: 16px;
 }
 
 .field-name {
@@ -318,9 +340,26 @@ button {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
   border-bottom: 1px solid var(--border);
   padding: 0 18px;
   background: var(--sidebar-bg);
+}
+
+.terminal-toolbar > div:first-child {
+  min-width: 0;
+}
+
+.terminal-toolbar strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminal-actions {
+  display: flex;
+  flex: none;
+  gap: 8px;
 }
 
 .status {
@@ -336,7 +375,7 @@ button {
 }
 
 .terminal-panel::after {
-  content: "Drop files to upload";
+  content: var(--drop-label, "Drop files to upload");
   position: absolute;
   inset: 48px 0 0;
   display: grid;
@@ -353,10 +392,6 @@ button {
 
 .terminal-panel.drag-over::after {
   opacity: 1;
-}
-
-.theme-control {
-  gap: 8px;
 }
 
 @media (max-width: 1080px) {

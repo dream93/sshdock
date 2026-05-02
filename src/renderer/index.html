@@ -16,96 +16,122 @@
     <main class="app-shell">
       <aside class="sidebar">
         <div class="brand">
-          <div class="brand-mark">SD</div>
+          <img class="brand-mark" src="../../build/icon.png" alt="" />
           <div>
             <h1>SSHDock</h1>
-            <p>Visual SSH client</p>
+            <p data-i18n="brandSubtitle">Visual SSH client</p>
           </div>
         </div>
 
-        <button id="newConnection" class="primary">New connection</button>
-        <label class="theme-control">
-          Theme
-          <select id="themeMode">
-            <option value="system">System</option>
-            <option value="dark">Dark</option>
-            <option value="light">Light</option>
-          </select>
-        </label>
+        <button id="newConnection" class="primary" data-i18n="newConnection">New connection</button>
         <div id="connectionList" class="connection-list"></div>
+        <button id="settingsButton" class="ghost sidebar-action" data-i18n="settings">Settings</button>
       </aside>
 
-      <section class="workspace">
+      <section id="workspace" class="workspace">
         <section class="config-panel">
-          <div class="panel-heading">
-            <div>
-              <h2 id="formTitle">Connection</h2>
-              <p>Passwords are requested at login time and are not saved.</p>
+          <div id="connectionSettings" class="settings-view hidden">
+            <div class="panel-heading">
+              <div>
+                <h2 data-i18n="settings">Settings</h2>
+                <p data-i18n="settingsSubtitle">Customize SSHDock preferences.</p>
+              </div>
             </div>
-            <button id="deleteConnection" class="ghost danger">Delete</button>
+
+            <div class="settings-form">
+              <label>
+                <span data-i18n="theme">Theme</span>
+                <select id="themeMode">
+                  <option value="system" data-i18n="themeSystem">System</option>
+                  <option value="dark" data-i18n="themeDark">Dark</option>
+                  <option value="light" data-i18n="themeLight">Light</option>
+                </select>
+              </label>
+              <label>
+                <span data-i18n="language">Language</span>
+                <select id="languageMode">
+                  <option value="system" data-i18n="languageSystem">System</option>
+                  <option value="en" data-i18n="languageEnglish">English</option>
+                  <option value="zh-CN" data-i18n="languageChinese">Simplified Chinese</option>
+                </select>
+              </label>
+            </div>
           </div>
 
-          <form id="connectionForm" class="connection-form">
-            <input id="connectionId" type="hidden" />
-            <label class="field-name">
-              Name
-              <input id="name" autocomplete="off" placeholder="Production" required />
-            </label>
-            <label class="field-host">
-              Host
-              <input id="host" autocomplete="off" placeholder="192.168.1.20" required />
-            </label>
-            <label class="field-port">
-              Port
-              <input id="port" type="number" min="1" max="65535" value="22" required />
-            </label>
-            <label class="field-username">
-              Username
-              <input id="username" autocomplete="off" placeholder="root" required />
-            </label>
-
-            <div class="auth-row">
-              <label class="radio-card">
-                <input type="radio" name="authType" value="password" checked />
-                <span>Password</span>
-              </label>
-              <label class="radio-card">
-                <input type="radio" name="authType" value="key" />
-                <span>Private key</span>
-              </label>
-            </div>
-
-            <label id="keyPathRow" class="key-row hidden">
-              Private key
-              <div class="path-picker">
-                <input id="keyPath" autocomplete="off" placeholder="~/.ssh/id_rsa" />
-                <button id="chooseKey" type="button" class="secondary">Browse</button>
+          <div id="connectionEditor">
+            <div class="panel-heading">
+              <div>
+                <h2 id="formTitle">Connection</h2>
+                <p data-i18n="passwordNote">Passwords are saved locally for future connections.</p>
               </div>
-            </label>
-
-            <label id="passwordRow">
-              Password
-              <input id="password" type="password" autocomplete="current-password" placeholder="Required to connect" />
-            </label>
-
-            <label id="passphraseRow" class="hidden">
-              Key passphrase
-              <input id="passphrase" type="password" autocomplete="off" placeholder="Optional" />
-            </label>
-
-            <div class="actions">
-              <button id="saveConnection" type="submit" class="secondary">Save</button>
-              <button id="connect" type="button" class="primary">Connect</button>
-              <button id="disconnect" type="button" class="ghost">Disconnect</button>
+              <button id="deleteConnection" class="ghost danger" data-i18n="delete">Delete</button>
             </div>
-          </form>
+
+            <form id="connectionForm" class="connection-form">
+              <input id="connectionId" type="hidden" />
+              <label class="field-name">
+                <span data-i18n="name">Name</span>
+                <input id="name" autocomplete="off" placeholder="Production" data-i18n-placeholder="namePlaceholder" required />
+              </label>
+              <label class="field-host">
+                <span data-i18n="host">Host</span>
+                <input id="host" autocomplete="off" placeholder="192.168.1.20" data-i18n-placeholder="hostPlaceholder" required />
+              </label>
+              <label class="field-port">
+                <span data-i18n="port">Port</span>
+                <input id="port" type="number" min="1" max="65535" value="22" required />
+              </label>
+              <label class="field-username">
+                <span data-i18n="username">Username</span>
+                <input id="username" autocomplete="off" placeholder="root" data-i18n-placeholder="usernamePlaceholder" required />
+              </label>
+
+              <div class="auth-row">
+                <label class="radio-card">
+                  <input type="radio" name="authType" value="password" checked />
+                  <span data-i18n="password">Password</span>
+                </label>
+                <label class="radio-card">
+                  <input type="radio" name="authType" value="key" />
+                  <span data-i18n="privateKey">Private key</span>
+                </label>
+              </div>
+
+              <label id="keyPathRow" class="key-row hidden">
+                <span data-i18n="privateKey">Private key</span>
+                <div class="path-picker">
+                  <input id="keyPath" autocomplete="off" placeholder="~/.ssh/id_rsa" data-i18n-placeholder="keyPathPlaceholder" />
+                  <button id="chooseKey" type="button" class="secondary" data-i18n="browse">Browse</button>
+                </div>
+              </label>
+
+              <label id="passwordRow">
+                <span data-i18n="password">Password</span>
+                <input id="password" type="password" autocomplete="current-password" placeholder="Required to connect" data-i18n-placeholder="passwordPlaceholder" />
+              </label>
+
+              <label id="passphraseRow" class="hidden">
+                <span data-i18n="keyPassphrase">Key passphrase</span>
+                <input id="passphrase" type="password" autocomplete="off" placeholder="Optional" data-i18n-placeholder="optionalPlaceholder" />
+              </label>
+
+              <div class="actions">
+                <button id="saveConnection" type="submit" class="secondary" data-i18n="save">Save</button>
+                <button id="connect" type="button" class="primary" data-i18n="connect">Connect</button>
+                <button id="disconnect" type="button" class="ghost" data-i18n="disconnect">Disconnect</button>
+              </div>
+            </form>
+          </div>
         </section>
 
         <section class="terminal-panel">
           <div class="terminal-toolbar">
             <div>
               <strong id="terminalTitle">Terminal</strong>
-              <span id="status" class="status">Idle</span>
+              <span id="status" class="status" data-status-key="idle">Idle</span>
+            </div>
+            <div class="terminal-actions">
+              <button id="toolbarDisconnect" type="button" class="ghost hidden" data-i18n="disconnect">Disconnect</button>
             </div>
           </div>
           <div id="terminal"></div>

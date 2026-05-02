@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, safeStorage } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const crypto = require("crypto");
@@ -22,7 +22,7 @@ function configPath() {
 function readConnections() {
   try {
     const raw = fs.readFileSync(configPath(), "utf8");
-    return JSON.parse(raw);
+    return JSON.parse(raw).map(decryptConnectionSecrets);
   } catch {
     return [];
   }
@@ -30,7 +30,52 @@ function readConnections() {
 
 function writeConnections(connections) {
   fs.mkdirSync(path.dirname(configPath()), { recursive: true });
-  fs.writeFileSync(configPath(), JSON.stringify(connections, null, 2), "utf8");
+  fs.writeFileSync(configPath(), JSON.stringify(connections.map(encryptConnectionSecrets), null, 2), "utf8");
+}
+
+function encryptSecret(value) {
+  const text = String(value || "");
+  if (!text) return { value: "", encoding: "" };
+  if (safeStorage.isEncryptionAvailable()) {
+    return {
+      value: safeStorage.encryptString(text).toString("base64"),
+      encoding: "safeStorage"
+    };
+  }
+  return { value: text, encoding: "plain" };
+}
+
+function decryptSecret(value, encoding) {
+  const text = String(value || "");
+  if (!text) return "";
+  if (encoding === "safeStorage") {
+    try {
+      return safeStorage.decryptString(Buffer.from(text, "base64"));
+    } catch {
+      return "";
+    }
+  }
+  return text;
+}
+
+function encryptConnectionSecrets(connection) {
+  const password = encryptSecret(connection.password);
+  const passphrase = encryptSecret(connection.passphrase);
+  return {
+    ...connection,
+    password: password.value,
+    passwordEncoding: password.encoding,
+    passphrase: passphrase.value,
+    passphraseEncoding: passphrase.encoding
+  };
+}
+
+function decryptConnectionSecrets(connection) {
+  return {
+    ...connection,
+    password: decryptSecret(connection.password, connection.passwordEncoding),
+    passphrase: decryptSecret(connection.passphrase, connection.passphraseEncoding)
+  };
 }
 
 function sanitizeConnection(input) {
@@ -41,7 +86,9 @@ function sanitizeConnection(input) {
     port: Number(input.port || 22),
     username: String(input.username || "").trim(),
     authType: input.authType === "key" ? "key" : "password",
-    keyPath: String(input.keyPath || "").trim()
+    keyPath: String(input.keyPath || "").trim(),
+    password: String(input.password || ""),
+    passphrase: String(input.passphrase || "")
   };
 }
 
@@ -124,9 +171,10 @@ ipcMain.handle("ssh:connect", async (event, payload) => {
   if (connection.authType === "key") {
     if (!connection.keyPath) throw new Error("Private key path is required.");
     connectConfig.privateKey = fs.readFileSync(connection.keyPath, "utf8");
-    if (payload.passphrase) connectConfig.passphrase = payload.passphrase;
+    const passphrase = payload.passphrase || connection.passphrase;
+    if (passphrase) connectConfig.passphrase = passphrase;
   } else {
-    connectConfig.password = payload.password || "";
+    connectConfig.password = payload.password || connection.password || "";
   }
 
   return new Promise((resolve, reject) => {
