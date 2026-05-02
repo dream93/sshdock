@@ -25,6 +25,9 @@
   "build": {
     "appId": "com.sshdock.app",
     "productName": "SSHDock",
+    "directories": {
+      "buildResources": "build"
+    },
     "files": [
       "src/**/*",
       "node_modules/**/*",
@@ -32,6 +35,7 @@
     ],
     "asar": true,
     "mac": {
+      "icon": "build/icon.icns",
       "target": [
         "pkg"
       ],
@@ -41,6 +45,7 @@
       "installLocation": "/Applications"
     },
     "win": {
+      "icon": "build/icon.ico",
       "target": [
         "nsis",
         "portable"
