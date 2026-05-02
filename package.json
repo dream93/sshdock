@@ -1,0 +1,54 @@
+{
+  "name": "sshdock",
+  "version": "0.1.0",
+  "description": "A visual cross-platform SSH shell client with password and key authentication.",
+  "main": "src/main.cjs",
+  "author": "SSHDock",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder",
+    "dist:mac": "electron-builder --mac pkg",
+    "dist:win": "electron-builder --win nsis portable --x64",
+    "dist:win:arm64": "electron-builder --win nsis portable --arm64"
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/xterm": "^5.5.0",
+    "ssh2": "^1.16.0"
+  },
+  "devDependencies": {
+    "electron": "^30.5.1",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.sshdock.app",
+    "productName": "SSHDock",
+    "files": [
+      "src/**/*",
+      "node_modules/**/*",
+      "package.json"
+    ],
+    "asar": true,
+    "mac": {
+      "target": [
+        "pkg"
+      ],
+      "category": "public.app-category.developer-tools"
+    },
+    "pkg": {
+      "installLocation": "/Applications"
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}

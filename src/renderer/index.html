@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SSHDock</title>
+    <script>
+      const savedTheme = localStorage.getItem("sshdock.theme") || "system";
+      const systemTheme = matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+      document.documentElement.dataset.theme = savedTheme === "system" ? systemTheme : savedTheme;
+    </script>
+    <link rel="stylesheet" href="../../node_modules/@xterm/xterm/css/xterm.css" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">SD</div>
+          <div>
+            <h1>SSHDock</h1>
+            <p>Visual SSH client</p>
+          </div>
+        </div>
+
+        <button id="newConnection" class="primary">New connection</button>
+        <label class="theme-control">
+          Theme
+          <select id="themeMode">
+            <option value="system">System</option>
+            <option value="dark">Dark</option>
+            <option value="light">Light</option>
+          </select>
+        </label>
+        <div id="connectionList" class="connection-list"></div>
+      </aside>
+
+      <section class="workspace">
+        <section class="config-panel">
+          <div class="panel-heading">
+            <div>
+              <h2 id="formTitle">Connection</h2>
+              <p>Passwords are requested at login time and are not saved.</p>
+            </div>
+            <button id="deleteConnection" class="ghost danger">Delete</button>
+          </div>
+
+          <form id="connectionForm" class="connection-form">
+            <input id="connectionId" type="hidden" />
+            <label class="field-name">
+              Name
+              <input id="name" autocomplete="off" placeholder="Production" required />
+            </label>
+            <label class="field-host">
+              Host
+              <input id="host" autocomplete="off" placeholder="192.168.1.20" required />
+            </label>
+            <label class="field-port">
+              Port
+              <input id="port" type="number" min="1" max="65535" value="22" required />
+            </label>
+            <label class="field-username">
+              Username
+              <input id="username" autocomplete="off" placeholder="root" required />
+            </label>
+
+            <div class="auth-row">
+              <label class="radio-card">
+                <input type="radio" name="authType" value="password" checked />
+                <span>Password</span>
+              </label>
+              <label class="radio-card">
+                <input type="radio" name="authType" value="key" />
+                <span>Private key</span>
+              </label>
+            </div>
+
+            <label id="keyPathRow" class="key-row hidden">
+              Private key
+              <div class="path-picker">
+                <input id="keyPath" autocomplete="off" placeholder="~/.ssh/id_rsa" />
+                <button id="chooseKey" type="button" class="secondary">Browse</button>
+              </div>
+            </label>
+
+            <label id="passwordRow">
+              Password
+              <input id="password" type="password" autocomplete="current-password" placeholder="Required to connect" />
+            </label>
+
+            <label id="passphraseRow" class="hidden">
+              Key passphrase
+              <input id="passphrase" type="password" autocomplete="off" placeholder="Optional" />
+            </label>
+
+            <div class="actions">
+              <button id="saveConnection" type="submit" class="secondary">Save</button>
+              <button id="connect" type="button" class="primary">Connect</button>
+              <button id="disconnect" type="button" class="ghost">Disconnect</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="terminal-panel">
+          <div class="terminal-toolbar">
+            <div>
+              <strong id="terminalTitle">Terminal</strong>
+              <span id="status" class="status">Idle</span>
+            </div>
+          </div>
+          <div id="terminal"></div>
+        </section>
+      </section>
+    </main>
+
+    <script src="../../node_modules/@xterm/xterm/lib/xterm.js"></script>
+    <script src="../../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
+    <script src="./renderer.js"></script>
+  </body>
+</html>

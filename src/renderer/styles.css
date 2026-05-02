@@ -1,0 +1,385 @@
+:root {
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --accent: #2a9d8f;
+  --accent-text: #061a17;
+  --danger: #ffb4a8;
+  --app-bg: #11151c;
+  --panel-bg: #141a22;
+  --sidebar-bg: #151b24;
+  --control-bg: #0f141b;
+  --control-bg-strong: #263140;
+  --control-hover: #202d38;
+  --card-bg: #1b2330;
+  --border: #28313d;
+  --border-strong: #303b49;
+  --border-raised: #3f4b5b;
+  --text: #eef3f8;
+  --muted: #9aa8b6;
+  --label: #b7c2ce;
+  --terminal-bg: #070a0f;
+  --terminal-fg: #eef3f8;
+  color-scheme: dark;
+  background: var(--app-bg);
+  color: var(--text);
+}
+
+:root[data-theme="light"] {
+  --accent: #168b7f;
+  --accent-text: #ffffff;
+  --danger: #b42318;
+  --app-bg: #eef2f6;
+  --panel-bg: #ffffff;
+  --sidebar-bg: #f7f9fb;
+  --control-bg: #ffffff;
+  --control-bg-strong: #e7edf4;
+  --control-hover: #edf4f2;
+  --card-bg: #ffffff;
+  --border: #d8e0ea;
+  --border-strong: #c4cfdb;
+  --border-raised: #b5c2d0;
+  --text: #182230;
+  --muted: #667085;
+  --label: #475467;
+  --terminal-bg: #fbfcfe;
+  --terminal-fg: #182230;
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  overflow: hidden;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+.app-shell {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  height: 100vh;
+}
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 22px;
+  border-right: 1px solid var(--border);
+  background: var(--sidebar-bg);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.brand-mark {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--accent-text);
+  font-weight: 800;
+}
+
+h1,
+h2,
+p {
+  margin: 0;
+}
+
+h1 {
+  font-size: 20px;
+}
+
+.brand p,
+.panel-heading p {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.connection-list {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  gap: 8px;
+  overflow: auto;
+}
+
+.connection-item {
+  width: 100%;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card-bg);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.connection-item.active,
+.connection-item:hover {
+  border-color: var(--accent);
+  background: var(--control-hover);
+}
+
+.connection-item strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.connection-item span {
+  display: block;
+  margin-top: 4px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  min-width: 0;
+  min-height: 0;
+  background: var(--app-bg);
+}
+
+.config-panel {
+  padding: 22px 26px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-bg);
+}
+
+.panel-heading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 18px;
+}
+
+.connection-form {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 14px;
+  align-items: end;
+}
+
+.field-name {
+  grid-column: span 4;
+}
+
+.field-host {
+  grid-column: span 4;
+}
+
+.field-port {
+  grid-column: span 1;
+}
+
+.field-username {
+  grid-column: span 3;
+}
+
+label {
+  display: grid;
+  gap: 7px;
+  color: var(--label);
+  font-size: 13px;
+}
+
+input,
+select {
+  width: 100%;
+  height: 38px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  padding: 0 11px;
+  outline: none;
+  background: var(--control-bg);
+  color: var(--text);
+}
+
+input:focus,
+select:focus {
+  border-color: var(--accent);
+}
+
+.auth-row,
+.actions,
+.path-picker {
+  display: flex;
+  gap: 9px;
+}
+
+.auth-row {
+  grid-column: span 4;
+  align-items: end;
+}
+
+.radio-card {
+  display: flex;
+  min-width: 132px;
+  height: 38px;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  padding: 0 11px;
+  background: var(--control-bg);
+  color: var(--text);
+}
+
+.radio-card input {
+  width: auto;
+  height: auto;
+}
+
+.key-row {
+  grid-column: span 5;
+}
+
+#passwordRow,
+#passphraseRow {
+  grid-column: span 4;
+}
+
+.path-picker input {
+  min-width: 0;
+}
+
+.actions {
+  grid-column: span 4;
+  justify-content: end;
+}
+
+.actions button {
+  min-width: 106px;
+}
+
+button {
+  height: 38px;
+  border: 0;
+  border-radius: 7px;
+  padding: 0 14px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.primary {
+  background: var(--accent);
+  color: var(--accent-text);
+  font-weight: 700;
+}
+
+.secondary {
+  border: 1px solid var(--border-raised);
+  background: var(--control-bg-strong);
+}
+
+.ghost {
+  border: 1px solid var(--border-strong);
+  background: transparent;
+}
+
+.danger {
+  color: var(--danger);
+}
+
+.hidden {
+  display: none;
+}
+
+.terminal-panel {
+  display: grid;
+  position: relative;
+  grid-template-rows: 48px 1fr;
+  min-height: 0;
+}
+
+.terminal-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border);
+  padding: 0 18px;
+  background: var(--sidebar-bg);
+}
+
+.status {
+  margin-left: 10px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+#terminal {
+  min-height: 0;
+  padding: 10px;
+  background: var(--terminal-bg);
+}
+
+.terminal-panel::after {
+  content: "Drop files to upload";
+  position: absolute;
+  inset: 48px 0 0;
+  display: grid;
+  place-items: center;
+  border: 2px dashed var(--accent);
+  background: color-mix(in srgb, var(--app-bg) 82%, transparent);
+  color: var(--text);
+  font-size: 22px;
+  font-weight: 800;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.terminal-panel.drag-over::after {
+  opacity: 1;
+}
+
+.theme-control {
+  gap: 8px;
+}
+
+@media (max-width: 1080px) {
+  .app-shell {
+    grid-template-columns: 240px 1fr;
+  }
+
+  .connection-form {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+
+  .field-name,
+  .field-host,
+  .field-username,
+  .auth-row,
+  .key-row,
+  #passwordRow,
+  #passphraseRow,
+  .actions {
+    grid-column: span 3;
+  }
+
+  .field-port {
+    grid-column: span 2;
+  }
+}
