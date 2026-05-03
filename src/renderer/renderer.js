@@ -258,6 +258,10 @@ function renderList() {
     button.className = `connection-item ${connection.id === activeConnectionId ? "active" : ""}`;
     button.innerHTML = `<strong>${escapeHtml(connection.name)}</strong><span>${escapeHtml(connection.username)}@${escapeHtml(connection.host)}:${connection.port}</span>`;
     button.addEventListener("click", () => loadConnection(connection));
+    button.addEventListener("dblclick", async () => {
+      loadConnection(connection);
+      await connect();
+    });
     list.appendChild(button);
   }
 }
