@@ -9,9 +9,15 @@ const $ = (id) => document.getElementById(id);
 let themeMode = localStorage.getItem(THEME_STORAGE_KEY) || "system";
 let languageMode = localStorage.getItem(LANGUAGE_STORAGE_KEY) || "system";
 let terminal;
+let idleTerminal;
+let idleFitAddon;
+let idlePaneElement;
 let connections = [];
 let activeConnectionId = "";
 let activeSessionId = "";
+let activeSessionConnectionId = "";
+let activeConnectionMenuId = "";
+const terminalSessions = new Map();
 const uploadProgress = new Map();
 
 const messages = {
@@ -65,6 +71,8 @@ const messages = {
     disconnected: "Disconnected",
     connectBeforeUploading: "Connect before uploading",
     connectBeforeDropping: "Connect to a host before dropping files.",
+    newLink: "New link",
+    editConnection: "Edit connection",
     uploading: "Uploading {fileName}",
     uploadingPercent: "Uploading {fileName} {percent}%",
     uploaded: "Uploaded {fileName}",
@@ -127,6 +135,8 @@ const messages = {
     disconnected: "已断开",
     connectBeforeUploading: "请先连接再上传",
     connectBeforeDropping: "请先连接主机，再拖放文件。",
+    newLink: "新建链接",
+    editConnection: "编辑连接",
     uploading: "正在上传 {fileName}",
     uploadingPercent: "正在上传 {fileName} {percent}%",
     uploaded: "已上传 {fileName}",
@@ -152,6 +162,11 @@ function t(key, values = {}) {
 }
 
 function setStatus(key, values = {}) {
+  const session = terminalSessions.get(activeSessionId);
+  if (session) {
+    session.statusKey = key;
+    session.statusValues = values;
+  }
   const status = $("status");
   status.dataset.statusKey = key;
   status.dataset.statusValues = JSON.stringify(values);
@@ -203,24 +218,63 @@ function applyTheme(mode) {
   localStorage.setItem(THEME_STORAGE_KEY, themeMode);
   document.documentElement.dataset.theme = resolvedTheme(themeMode);
   if ($("themeMode")) $("themeMode").value = themeMode;
-  if (terminal) terminal.options.theme = terminalTheme();
+  if (idleTerminal) idleTerminal.options.theme = terminalTheme();
+  for (const session of terminalSessions.values()) {
+    session.terminal.options.theme = terminalTheme();
+  }
 }
 
 applyTheme(themeMode);
 applyLanguage(languageMode);
 
-terminal = new TerminalCtor({
-  cursorBlink: true,
-  convertEol: true,
-  fontFamily: 'Menlo, Consolas, "Liberation Mono", monospace',
-  fontSize: 13,
-  theme: terminalTheme()
-});
-const fitAddon = new FitAddonCtor();
-terminal.loadAddon(fitAddon);
-terminal.open(document.getElementById("terminal"));
-fitAddon.fit();
-terminal.writeln(t("ready"));
+function terminalOptions() {
+  return {
+    cursorBlink: true,
+    convertEol: true,
+    fontFamily: 'Menlo, Consolas, "Liberation Mono", monospace',
+    fontSize: 13,
+    theme: terminalTheme()
+  };
+}
+
+function createTerminalIn(container) {
+  const instance = new TerminalCtor(terminalOptions());
+  const fitAddon = new FitAddonCtor();
+  instance.loadAddon(fitAddon);
+  instance.open(container);
+  return { terminal: instance, fitAddon };
+}
+
+function createTerminalPane(className = "terminal-instance") {
+  const pane = document.createElement("div");
+  pane.className = className;
+  $("terminal").appendChild(pane);
+  return { pane, ...createTerminalIn(pane) };
+}
+
+function showIdleTerminal() {
+  activeSessionId = "";
+  activeSessionConnectionId = "";
+  terminal = idleTerminal;
+  $("terminalTitle").textContent = t("terminal");
+  setStatus("idle");
+  idlePaneElement?.classList.remove("hidden");
+  for (const session of terminalSessions.values()) {
+    session.pane.classList.add("hidden");
+  }
+  renderSessionTabs();
+  $("workspace").classList.remove("terminal-focused");
+  $("toolbarDisconnect").classList.add("hidden");
+  requestAnimationFrame(fitAndResize);
+}
+
+const idlePane = createTerminalPane();
+idleTerminal = idlePane.terminal;
+idleFitAddon = idlePane.fitAddon;
+idlePaneElement = idlePane.pane;
+terminal = idleTerminal;
+idleFitAddon.fit();
+idleTerminal.writeln(t("ready"));
 
 function currentAuthType() {
   return document.querySelector('input[name="authType"]:checked').value;
@@ -241,6 +295,84 @@ function formConnection() {
   };
 }
 
+function createTerminalSession(sessionId, connection) {
+  const pane = createTerminalPane();
+  const session = {
+    id: sessionId,
+    connectionId: connection.id || "",
+    connected: false,
+    title: connection.name || connection.host,
+    statusKey: "connecting",
+    statusValues: {},
+    pane: pane.pane,
+    terminal: pane.terminal,
+    fitAddon: pane.fitAddon
+  };
+
+  session.terminal.onData((data) => {
+    api.sendInput({ sessionId, data });
+  });
+
+  terminalSessions.set(sessionId, session);
+  return session;
+}
+
+function renderSessionTabs() {
+  const tabs = $("sessionTabs");
+  tabs.innerHTML = "";
+  tabs.classList.toggle("hidden", terminalSessions.size === 0);
+
+  for (const session of terminalSessions.values()) {
+    const tab = document.createElement("button");
+    tab.type = "button";
+    tab.className = `session-tab ${session.id === activeSessionId ? "active" : ""}`;
+    tab.textContent = session.title;
+    tab.addEventListener("click", () => selectTerminalSession(session.id));
+    tabs.appendChild(tab);
+  }
+}
+
+function selectTerminalSession(sessionId) {
+  const session = terminalSessions.get(sessionId);
+  if (!session) {
+    showIdleTerminal();
+    return;
+  }
+
+  activeSessionId = session.id;
+  activeSessionConnectionId = session.connectionId;
+  terminal = session.terminal;
+  idlePaneElement?.classList.add("hidden");
+
+  for (const item of terminalSessions.values()) {
+    item.pane.classList.toggle("hidden", item.id !== sessionId);
+  }
+
+  $("terminalTitle").textContent = session.title;
+  setStatus(session.statusKey, session.statusValues);
+  setTerminalFocus(true);
+  renderSessionTabs();
+  requestAnimationFrame(fitAndResize);
+}
+
+function removeTerminalSession(sessionId) {
+  const session = terminalSessions.get(sessionId);
+  if (!session) return;
+  terminalSessions.delete(sessionId);
+  uploadProgress.clear();
+  session.terminal.dispose();
+  session.pane.remove();
+
+  if (activeSessionId !== sessionId) {
+    renderSessionTabs();
+    return;
+  }
+
+  const nextSession = terminalSessions.values().next().value;
+  if (nextSession) selectTerminalSession(nextSession.id);
+  else showIdleTerminal();
+}
+
 function renderList() {
   const list = $("connectionList");
   list.innerHTML = "";
@@ -254,15 +386,66 @@ function renderList() {
   }
 
   for (const connection of connections) {
+    const item = document.createElement("div");
+    item.className = "connection-row";
+
     const button = document.createElement("button");
     button.className = `connection-item ${connection.id === activeConnectionId ? "active" : ""}`;
     button.innerHTML = `<strong>${escapeHtml(connection.name)}</strong><span>${escapeHtml(connection.username)}@${escapeHtml(connection.host)}:${connection.port}</span>`;
-    button.addEventListener("click", () => loadConnection(connection));
-    button.addEventListener("dblclick", async () => {
+    button.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      if (event.button !== 0) return;
+      if (event.detail < 2) {
+        if (isActiveSessionConnection(connection.id)) {
+          showConnectionMenu(connection.id);
+          return;
+        }
+        hideConnectionMenu();
+        loadConnection(connection);
+        return;
+      }
+
+      hideConnectionMenu();
+      if (isActiveSessionConnection(connection.id)) {
+        const existingSession = firstSessionForConnection(connection.id);
+        if (existingSession) selectTerminalSession(existingSession.id);
+        setStatus("connected");
+        return;
+      }
+
       loadConnection(connection);
       await connect();
     });
-    list.appendChild(button);
+    item.appendChild(button);
+
+    if (activeConnectionMenuId === connection.id) {
+      const menu = document.createElement("div");
+      menu.className = "connection-menu";
+      menu.addEventListener("click", (event) => event.stopPropagation());
+
+      const newLink = document.createElement("button");
+      newLink.type = "button";
+      newLink.textContent = t("newLink");
+      newLink.addEventListener("click", async () => {
+        hideConnectionMenu();
+        loadConnection(connection);
+        await connect(connection);
+      });
+
+      const edit = document.createElement("button");
+      edit.type = "button";
+      edit.textContent = t("editConnection");
+      edit.addEventListener("click", () => {
+        hideConnectionMenu();
+        loadConnection(connection);
+      });
+
+      menu.appendChild(newLink);
+      menu.appendChild(edit);
+      item.appendChild(menu);
+    }
+
+    list.appendChild(item);
   }
 }
 
@@ -330,14 +513,26 @@ function fillConnectionForm(connection) {
   updateAuthUI();
 }
 
-function loadConnection(connection) {
-  if (activeSessionId && connection.id === activeConnectionId) {
-    $("settingsButton").classList.remove("active");
-    setTerminalFocus(true);
-    renderList();
-    return;
-  }
+function isActiveSessionConnection(connectionId) {
+  return Boolean(connectionId && Array.from(terminalSessions.values()).some((session) => session.connected && session.connectionId === connectionId));
+}
 
+function firstSessionForConnection(connectionId) {
+  return Array.from(terminalSessions.values()).find((session) => session.connected && session.connectionId === connectionId);
+}
+
+function showConnectionMenu(connectionId) {
+  activeConnectionMenuId = connectionId;
+  renderList();
+}
+
+function hideConnectionMenu() {
+  if (!activeConnectionMenuId) return;
+  activeConnectionMenuId = "";
+  renderList();
+}
+
+function loadConnection(connection) {
   showConnectionEditor();
   fillConnectionForm(connection);
   setTerminalFocus(false);
@@ -357,29 +552,29 @@ async function saveConnection() {
   setStatus("saved");
 }
 
-async function connect() {
-  if (activeSessionId) await disconnect();
-  if (!$("connectionForm").reportValidity()) return;
+async function connect(connectionOverride) {
+  if (!connectionOverride && !$("connectionForm").reportValidity()) return;
 
-  const connection = formConnection();
-  setStatus("connecting");
-  terminal.clear();
-  terminal.writeln(t("connectingTo", { target: `${connection.username}@${connection.host}:${connection.port}` }));
+  const connection = connectionOverride || formConnection();
+  const sessionId = crypto.randomUUID();
+  const session = createTerminalSession(sessionId, connection);
+  selectTerminalSession(sessionId);
+  session.terminal.writeln(t("connectingTo", { target: `${connection.username}@${connection.host}:${connection.port}` }));
 
   try {
-    const result = await api.connect({
+    await api.connect({
+      sessionId,
       connection,
       password: $("password").value,
       passphrase: $("passphrase").value
     });
-    activeSessionId = result.sessionId;
-    $("terminalTitle").textContent = connection.name || connection.host;
-    setTerminalFocus(true);
-    fitAndResize();
+    session.connected = true;
     try {
       const saved = await api.saveConnection(connection);
       connections = await api.listConnections();
       fillConnectionForm(saved);
+      session.connectionId = saved.id;
+      activeSessionConnectionId = saved.id;
       renderList();
       setStatus("connectedSaved");
     } catch (saveError) {
@@ -389,36 +584,36 @@ async function connect() {
     fitAndResize();
   } catch (error) {
     setStatus("connectionFailed");
-    setTerminalFocus(false);
-    terminal.writeln(`\r\n${t("connectionFailedDetail", { message: error.message })}`);
+    session.terminal.writeln(`\r\n${t("connectionFailedDetail", { message: error.message })}`);
   }
 }
 
 async function disconnect() {
   if (!activeSessionId) return;
   const sessionId = activeSessionId;
-  activeSessionId = "";
   await api.disconnect(sessionId);
-  setStatus("disconnected");
-  setTerminalFocus(false);
+  removeTerminalSession(sessionId);
 }
 
 function setTerminalFocus(isFocused) {
   $("workspace").classList.toggle("terminal-focused", isFocused);
-  $("toolbarDisconnect").classList.toggle("hidden", !isFocused);
+  $("toolbarDisconnect").classList.toggle("hidden", !isFocused || !activeSessionId);
   if (isFocused) $("settingsButton").classList.remove("active");
   requestAnimationFrame(fitAndResize);
 }
 
 function fitAndResize() {
-  fitAddon.fit();
-  if (activeSessionId) {
+  const session = terminalSessions.get(activeSessionId);
+  if (session) {
+    session.fitAddon.fit();
     api.resize({
       sessionId: activeSessionId,
-      cols: terminal.cols,
-      rows: terminal.rows
+      cols: session.terminal.cols,
+      rows: session.terminal.rows
     });
+    return;
   }
+  idleFitAddon.fit();
 }
 
 function fileSizeLabel(bytes) {
@@ -489,11 +684,8 @@ for (const radio of document.querySelectorAll('input[name="authType"]')) {
   radio.addEventListener("change", updateAuthUI);
 }
 
-terminal.onData((data) => {
-  if (activeSessionId) api.sendInput({ sessionId: activeSessionId, data });
-});
-
 window.addEventListener("resize", fitAndResize);
+document.addEventListener("click", hideConnectionMenu);
 systemThemeQuery.addEventListener("change", () => {
   if (themeMode === "system") applyTheme("system");
 });
@@ -515,31 +707,35 @@ $("terminal").addEventListener("drop", async (event) => {
 });
 
 api.onData(({ sessionId, data }) => {
-  if (sessionId === activeSessionId) terminal.write(data);
+  const session = terminalSessions.get(sessionId);
+  if (session) session.terminal.write(data);
 });
 
 api.onUploadProgress(({ sessionId, uploadId, fileName, transferred, total }) => {
-  if (sessionId !== activeSessionId || !total) return;
+  const session = terminalSessions.get(sessionId);
+  if (!session || !total) return;
   const percent = Math.floor((transferred / total) * 100);
   if (uploadProgress.get(uploadId) === percent) return;
   uploadProgress.set(uploadId, percent);
-  setStatus("uploadingPercent", { fileName, percent });
+  session.statusKey = "uploadingPercent";
+  session.statusValues = { fileName, percent };
+  if (sessionId === activeSessionId) setStatus("uploadingPercent", { fileName, percent });
 });
 
 api.onClosed(({ sessionId }) => {
-  if (sessionId === activeSessionId) {
-    activeSessionId = "";
-    setStatus("closed");
-    setTerminalFocus(false);
-    terminal.writeln(`\r\n${t("sessionClosed")}`);
-  }
+  const session = terminalSessions.get(sessionId);
+  if (!session) return;
+  session.terminal.writeln(`\r\n${t("sessionClosed")}`);
+  removeTerminalSession(sessionId);
 });
 
 api.onError(({ sessionId, message }) => {
-  if (sessionId === activeSessionId) {
-    setStatus("error");
-    terminal.writeln(`\r\n${message}`);
-  }
+  const session = terminalSessions.get(sessionId);
+  if (!session) return;
+  session.statusKey = "error";
+  session.statusValues = {};
+  session.terminal.writeln(`\r\n${message}`);
+  if (sessionId === activeSessionId) setStatus("error");
 });
 
 refreshConnections().catch((error) => {

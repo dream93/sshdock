@@ -116,6 +116,10 @@ h1 {
   overflow: auto;
 }
 
+.connection-row {
+  position: relative;
+}
+
 .connection-item {
   width: 100%;
   height: auto;
@@ -150,6 +154,36 @@ h1 {
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.connection-menu {
+  position: absolute;
+  z-index: 5;
+  top: calc(100% + 6px);
+  right: 0;
+  display: grid;
+  width: 150px;
+  padding: 6px;
+  border: 1px solid var(--border-raised);
+  border-radius: 8px;
+  background: var(--panel-bg);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.28);
+}
+
+.connection-menu button {
+  width: 100%;
+  height: 34px;
+  border: 0;
+  border-radius: 6px;
+  padding: 0 10px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.connection-menu button:hover {
+  background: var(--control-hover);
 }
 
 .workspace {
@@ -334,7 +368,7 @@ button {
 .terminal-panel {
   display: grid;
   position: relative;
-  grid-template-rows: 48px 1fr;
+  grid-template-rows: 48px auto 1fr;
   min-height: 0;
 }
 
@@ -370,10 +404,56 @@ button {
   font-size: 13px;
 }
 
+.session-tabs {
+  display: flex;
+  min-width: 0;
+  gap: 6px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border);
+  padding: 6px 10px;
+  background: var(--panel-bg);
+}
+
+.session-tabs.hidden {
+  display: none;
+}
+
+.session-tab {
+  max-width: 180px;
+  height: 30px;
+  flex: none;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  padding: 0 10px;
+  overflow: hidden;
+  background: var(--control-bg);
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-tab.active,
+.session-tab:hover {
+  border-color: var(--accent);
+  background: var(--control-hover);
+  color: var(--text);
+}
+
 #terminal {
+  position: relative;
+  min-height: 0;
+  background: var(--terminal-bg);
+}
+
+.terminal-instance {
+  position: absolute;
+  inset: 0;
   min-height: 0;
   padding: 10px;
-  background: var(--terminal-bg);
+}
+
+.terminal-instance.hidden {
+  display: none;
 }
 
 .terminal-panel::after {

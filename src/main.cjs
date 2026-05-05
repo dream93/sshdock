@@ -156,7 +156,7 @@ ipcMain.handle("dialog:keyPath", async () => {
 
 ipcMain.handle("ssh:connect", async (event, payload) => {
   const connection = sanitizeConnection(payload.connection || {});
-  const sessionId = crypto.randomUUID();
+  const sessionId = payload.sessionId || crypto.randomUUID();
   const client = new Client();
   const sender = event.sender;
 
