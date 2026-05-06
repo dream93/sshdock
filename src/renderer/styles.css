@@ -139,6 +139,11 @@ h1 {
   background: var(--control-hover);
 }
 
+.connection-item.editing {
+  border-color: var(--border-raised);
+  background: var(--card-bg);
+}
+
 .connection-item strong {
   display: block;
   overflow: hidden;
@@ -474,6 +479,37 @@ button {
 
 .terminal-panel.drag-over::after {
   opacity: 1;
+}
+
+.terminal-window-body {
+  background: var(--terminal-bg);
+}
+
+.detached-terminal-shell {
+  display: grid;
+  grid-template-rows: 48px 1fr;
+  height: 100vh;
+  min-height: 0;
+}
+
+.detached-terminal-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid var(--border);
+  padding: 0 16px;
+  background: var(--sidebar-bg);
+}
+
+.detached-terminal-toolbar strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.detached-terminal {
+  min-height: 0;
+  padding: 10px;
 }
 
 @media (max-width: 1080px) {

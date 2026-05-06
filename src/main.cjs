@@ -6,6 +6,8 @@ const { Client } = require("ssh2");
 
 let mainWindow;
 const sessions = new Map();
+const terminalWindows = new Map();
+const MAX_SESSION_HISTORY = 200000;
 
 function posixJoin(...parts) {
   return parts
@@ -110,6 +112,90 @@ function createWindow() {
   mainWindow.loadFile(path.join(__dirname, "renderer", "index.html"));
 }
 
+function sessionWindows(sessionId) {
+  let windows = terminalWindows.get(sessionId);
+  if (!windows) {
+    windows = new Set();
+    terminalWindows.set(sessionId, windows);
+  }
+  return windows;
+}
+
+function sendSessionEvent(sessionId, channel, payload) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send(channel, payload);
+  }
+
+  const windows = terminalWindows.get(sessionId);
+  if (!windows) return;
+
+  for (const window of windows) {
+    if (!window.isDestroyed()) window.webContents.send(channel, payload);
+  }
+}
+
+function appendSessionHistory(sessionId, text) {
+  const session = sessions.get(sessionId);
+  if (!session) return;
+  session.history = `${session.history || ""}${text}`;
+  if (session.history.length > MAX_SESSION_HISTORY) {
+    session.history = session.history.slice(session.history.length - MAX_SESSION_HISTORY);
+  }
+}
+
+function closeTerminalWindows(sessionId) {
+  const windows = terminalWindows.get(sessionId);
+  if (!windows) return;
+
+  for (const window of windows) {
+    if (!window.isDestroyed()) window.close();
+  }
+  terminalWindows.delete(sessionId);
+}
+
+function createTerminalWindow(sessionId, title) {
+  const existing = Array.from(terminalWindows.get(sessionId) || []).find((window) => !window.isDestroyed());
+  if (existing) {
+    existing.focus();
+    return existing;
+  }
+
+  const terminalWindow = new BrowserWindow({
+    width: 920,
+    height: 620,
+    minWidth: 560,
+    minHeight: 360,
+    title: title ? `${title} - SSHDock` : "SSHDock Terminal",
+    backgroundColor: "#070a0f",
+    webPreferences: {
+      preload: path.join(__dirname, "preload.cjs"),
+      contextIsolation: true,
+      nodeIntegration: false
+    }
+  });
+
+  sessionWindows(sessionId).add(terminalWindow);
+  terminalWindow.on("closed", () => {
+    const windows = terminalWindows.get(sessionId);
+    if (windows) {
+      windows.delete(terminalWindow);
+      if (windows.size === 0) terminalWindows.delete(sessionId);
+    }
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("terminal:window-closed", { sessionId });
+    }
+  });
+
+  terminalWindow.loadFile(path.join(__dirname, "renderer", "terminal-window.html"), {
+    query: {
+      sessionId,
+      title: title || "Terminal"
+    }
+  });
+
+  return terminalWindow;
+}
+
 app.whenReady().then(createWindow);
 
 app.on("window-all-closed", () => {
@@ -117,6 +203,7 @@ app.on("window-all-closed", () => {
     session.stream?.end();
     session.client?.end();
   }
+  terminalWindows.clear();
   if (process.platform !== "darwin") app.quit();
 });
 
@@ -154,11 +241,26 @@ ipcMain.handle("dialog:keyPath", async () => {
   return result.canceled ? "" : result.filePaths[0];
 });
 
-ipcMain.handle("ssh:connect", async (event, payload) => {
+ipcMain.handle("terminal:open-window", (_event, payload) => {
+  const sessionId = String(payload?.sessionId || "");
+  if (!sessionId || !sessions.has(sessionId)) throw new Error("No active SSH session.");
+  createTerminalWindow(sessionId, String(payload?.title || "Terminal"));
+  return true;
+});
+
+ipcMain.handle("terminal:snapshot", (_event, sessionId) => {
+  const session = sessions.get(String(sessionId || ""));
+  if (!session) return { history: "" };
+  return {
+    history: session.history || "",
+    title: session.title || "Terminal"
+  };
+});
+
+ipcMain.handle("ssh:connect", async (_event, payload) => {
   const connection = sanitizeConnection(payload.connection || {});
   const sessionId = payload.sessionId || crypto.randomUUID();
   const client = new Client();
-  const sender = event.sender;
 
   const connectConfig = {
     host: connection.host,
@@ -189,19 +291,24 @@ ipcMain.handle("ssh:connect", async (event, payload) => {
             return;
           }
 
-          sessions.set(sessionId, { client, stream, sender });
+          sessions.set(sessionId, { client, stream, history: "", title: connection.name || connection.host || "Terminal" });
 
           stream.on("data", (data) => {
-            sender.send("ssh:data", { sessionId, data: data.toString("utf8") });
+            const text = data.toString("utf8");
+            appendSessionHistory(sessionId, text);
+            sendSessionEvent(sessionId, "ssh:data", { sessionId, data: text });
           });
 
           stream.stderr.on("data", (data) => {
-            sender.send("ssh:data", { sessionId, data: data.toString("utf8") });
+            const text = data.toString("utf8");
+            appendSessionHistory(sessionId, text);
+            sendSessionEvent(sessionId, "ssh:data", { sessionId, data: text });
           });
 
           stream.on("close", () => {
             sessions.delete(sessionId);
-            sender.send("ssh:closed", { sessionId });
+            sendSessionEvent(sessionId, "ssh:closed", { sessionId });
+            closeTerminalWindows(sessionId);
             client.end();
           });
 
@@ -212,11 +319,12 @@ ipcMain.handle("ssh:connect", async (event, payload) => {
       .on("error", (error) => {
         sessions.delete(sessionId);
         if (!settled) reject(error);
-        else sender.send("ssh:error", { sessionId, message: error.message });
+        else sendSessionEvent(sessionId, "ssh:error", { sessionId, message: error.message });
       })
       .on("close", () => {
         sessions.delete(sessionId);
-        sender.send("ssh:closed", { sessionId });
+        sendSessionEvent(sessionId, "ssh:closed", { sessionId });
+        closeTerminalWindows(sessionId);
       })
       .connect(connectConfig);
   });
@@ -240,11 +348,12 @@ ipcMain.handle("ssh:disconnect", (_event, sessionId) => {
     session.stream?.end();
     session.client?.end();
     sessions.delete(sessionId);
+    closeTerminalWindows(sessionId);
   }
   return true;
 });
 
-ipcMain.handle("ssh:upload", async (event, payload) => {
+ipcMain.handle("ssh:upload", async (_event, payload) => {
   const session = sessions.get(payload.sessionId);
   if (!session?.client) throw new Error("No active SSH session.");
 
@@ -252,7 +361,6 @@ ipcMain.handle("ssh:upload", async (event, payload) => {
   const stat = fs.statSync(localPath);
   if (!stat.isFile()) throw new Error("Only single files are supported for drag upload.");
 
-  const sender = event.sender;
   const fileName = path.basename(localPath);
   const uploadId = crypto.randomUUID();
 
@@ -270,7 +378,7 @@ ipcMain.handle("ssh:upload", async (event, payload) => {
   });
   const remotePath = posixJoin(remoteRoot, fileName);
 
-  sender.send("ssh:upload-progress", {
+  sendSessionEvent(payload.sessionId, "ssh:upload-progress", {
     sessionId: payload.sessionId,
     uploadId,
     fileName,
@@ -282,7 +390,7 @@ ipcMain.handle("ssh:upload", async (event, payload) => {
   await new Promise((resolve, reject) => {
     sftp.fastPut(localPath, remotePath, {
       step: (transferred, _chunk, total) => {
-        sender.send("ssh:upload-progress", {
+        sendSessionEvent(payload.sessionId, "ssh:upload-progress", {
           sessionId: payload.sessionId,
           uploadId,
           fileName,

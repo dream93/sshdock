@@ -73,6 +73,8 @@ const messages = {
     connectBeforeDropping: "Connect to a host before dropping files.",
     newLink: "New link",
     editConnection: "Edit connection",
+    popOut: "Pop out",
+    showPopOut: "Show window",
     uploading: "Uploading {fileName}",
     uploadingPercent: "Uploading {fileName} {percent}%",
     uploaded: "Uploaded {fileName}",
@@ -137,6 +139,8 @@ const messages = {
     connectBeforeDropping: "请先连接主机，再拖放文件。",
     newLink: "新建链接",
     editConnection: "编辑连接",
+    popOut: "弹出窗口",
+    showPopOut: "显示窗口",
     uploading: "正在上传 {fileName}",
     uploadingPercent: "正在上传 {fileName} {percent}%",
     uploaded: "已上传 {fileName}",
@@ -190,6 +194,7 @@ function applyLanguage(mode) {
   if (!activeConnectionId) $("formTitle").textContent = t("connection");
   if (!activeSessionId) $("terminalTitle").textContent = t("terminal");
   renderList();
+  updateTerminalActions();
   document.documentElement.style.setProperty("--drop-label", `"${t("dropFilesToUpload")}"`);
 
   const status = $("status");
@@ -264,7 +269,8 @@ function showIdleTerminal() {
   }
   renderSessionTabs();
   $("workspace").classList.remove("terminal-focused");
-  $("toolbarDisconnect").classList.add("hidden");
+  updateTerminalActions();
+  renderList();
   requestAnimationFrame(fitAndResize);
 }
 
@@ -304,6 +310,7 @@ function createTerminalSession(sessionId, connection) {
     title: connection.name || connection.host,
     statusKey: "connecting",
     statusValues: {},
+    detached: false,
     pane: pane.pane,
     terminal: pane.terminal,
     fitAddon: pane.fitAddon
@@ -332,6 +339,13 @@ function renderSessionTabs() {
   }
 }
 
+function updateTerminalActions() {
+  const session = terminalSessions.get(activeSessionId);
+  $("toolbarDisconnect").classList.toggle("hidden", !session);
+  $("popOutTerminal").classList.toggle("hidden", !session);
+  if (session) $("popOutTerminal").textContent = t(session.detached ? "showPopOut" : "popOut");
+}
+
 function selectTerminalSession(sessionId) {
   const session = terminalSessions.get(sessionId);
   if (!session) {
@@ -352,6 +366,7 @@ function selectTerminalSession(sessionId) {
   setStatus(session.statusKey, session.statusValues);
   setTerminalFocus(true);
   renderSessionTabs();
+  renderList();
   requestAnimationFrame(fitAndResize);
 }
 
@@ -390,7 +405,10 @@ function renderList() {
     item.className = "connection-row";
 
     const button = document.createElement("button");
-    button.className = `connection-item ${connection.id === activeConnectionId ? "active" : ""}`;
+    const classes = ["connection-item"];
+    if (connection.id === activeSessionConnectionId) classes.push("active");
+    else if (connection.id === activeConnectionId) classes.push("editing");
+    button.className = classes.join(" ");
     button.innerHTML = `<strong>${escapeHtml(connection.name)}</strong><span>${escapeHtml(connection.username)}@${escapeHtml(connection.host)}:${connection.port}</span>`;
     button.addEventListener("click", async (event) => {
       event.stopPropagation();
@@ -595,9 +613,21 @@ async function disconnect() {
   removeTerminalSession(sessionId);
 }
 
+async function openTerminalWindow() {
+  const session = terminalSessions.get(activeSessionId);
+  if (!session) return;
+
+  await api.openTerminalWindow({
+    sessionId: session.id,
+    title: session.title
+  });
+  session.detached = true;
+  updateTerminalActions();
+}
+
 function setTerminalFocus(isFocused) {
   $("workspace").classList.toggle("terminal-focused", isFocused);
-  $("toolbarDisconnect").classList.toggle("hidden", !isFocused || !activeSessionId);
+  updateTerminalActions();
   if (isFocused) $("settingsButton").classList.remove("active");
   requestAnimationFrame(fitAndResize);
 }
@@ -662,6 +692,7 @@ $("connectionForm").addEventListener("submit", async (event) => {
 $("connect").addEventListener("click", connect);
 $("disconnect").addEventListener("click", disconnect);
 $("toolbarDisconnect").addEventListener("click", disconnect);
+$("popOutTerminal").addEventListener("click", openTerminalWindow);
 $("newConnection").addEventListener("click", clearForm);
 $("settingsButton").addEventListener("click", showSettings);
 $("themeMode").addEventListener("change", (event) => applyTheme(event.target.value));
@@ -736,6 +767,13 @@ api.onError(({ sessionId, message }) => {
   session.statusValues = {};
   session.terminal.writeln(`\r\n${message}`);
   if (sessionId === activeSessionId) setStatus("error");
+});
+
+api.onTerminalWindowClosed(({ sessionId }) => {
+  const session = terminalSessions.get(sessionId);
+  if (!session) return;
+  session.detached = false;
+  if (sessionId === activeSessionId) updateTerminalActions();
 });
 
 refreshConnections().catch((error) => {

@@ -1,0 +1,86 @@
+const api = window.sshDock;
+const TerminalCtor = window.Terminal;
+const FitAddonCtor = window.FitAddon.FitAddon;
+const systemThemeQuery = window.matchMedia("(prefers-color-scheme: light)");
+const params = new URLSearchParams(window.location.search);
+const sessionId = params.get("sessionId") || "";
+const initialTitle = params.get("title") || "Terminal";
+
+function resolvedTheme() {
+  const mode = localStorage.getItem("sshdock.theme") || "system";
+  if (mode === "light" || mode === "dark") return mode;
+  return systemThemeQuery.matches ? "light" : "dark";
+}
+
+function terminalTheme() {
+  const styles = getComputedStyle(document.documentElement);
+  return {
+    background: styles.getPropertyValue("--terminal-bg").trim(),
+    foreground: styles.getPropertyValue("--terminal-fg").trim(),
+    cursor: styles.getPropertyValue("--accent").trim()
+  };
+}
+
+function applyTheme() {
+  document.documentElement.dataset.theme = resolvedTheme();
+  terminal.options.theme = terminalTheme();
+}
+
+const terminal = new TerminalCtor({
+  cursorBlink: true,
+  convertEol: true,
+  fontFamily: 'Menlo, Consolas, "Liberation Mono", monospace',
+  fontSize: 13,
+  theme: terminalTheme()
+});
+const fitAddon = new FitAddonCtor();
+
+terminal.loadAddon(fitAddon);
+terminal.open(document.getElementById("terminal"));
+document.getElementById("terminalTitle").textContent = initialTitle;
+document.title = `${initialTitle} - SSHDock`;
+
+function fitAndResize() {
+  fitAddon.fit();
+  if (sessionId) {
+    api.resize({
+      sessionId,
+      cols: terminal.cols,
+      rows: terminal.rows
+    });
+  }
+}
+
+terminal.onData((data) => {
+  if (sessionId) api.sendInput({ sessionId, data });
+});
+
+api.onData((payload) => {
+  if (payload.sessionId === sessionId) terminal.write(payload.data);
+});
+
+api.onClosed((payload) => {
+  if (payload.sessionId !== sessionId) return;
+  document.getElementById("status").textContent = "Closed";
+  terminal.writeln("\r\nSession closed.");
+});
+
+api.onError((payload) => {
+  if (payload.sessionId !== sessionId) return;
+  document.getElementById("status").textContent = "Error";
+  terminal.writeln(`\r\n${payload.message}`);
+});
+
+window.addEventListener("resize", fitAndResize);
+systemThemeQuery.addEventListener("change", applyTheme);
+
+api.terminalSnapshot(sessionId).then((snapshot) => {
+  if (snapshot.title) {
+    document.getElementById("terminalTitle").textContent = snapshot.title;
+    document.title = `${snapshot.title} - SSHDock`;
+  }
+  if (snapshot.history) terminal.write(snapshot.history);
+  fitAndResize();
+}).catch(() => {
+  fitAndResize();
+});
