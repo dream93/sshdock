@@ -239,6 +239,18 @@ h1 {
   align-items: end;
 }
 
+.form-alert {
+  grid-column: 1 / -1;
+  border: 1px solid color-mix(in srgb, var(--danger) 60%, var(--border));
+  border-radius: 7px;
+  padding: 9px 11px;
+  background: color-mix(in srgb, var(--danger) 12%, var(--panel-bg));
+  color: var(--danger);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
 .settings-form {
   display: grid;
   max-width: 420px;

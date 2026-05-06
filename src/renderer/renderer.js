@@ -177,6 +177,12 @@ function setStatus(key, values = {}) {
   status.textContent = t(key, values);
 }
 
+function setConnectionError(message = "") {
+  const alert = $("connectionError");
+  alert.textContent = message;
+  alert.classList.toggle("hidden", !message);
+}
+
 function applyLanguage(mode) {
   languageMode = mode === "en" || mode === "zh-CN" ? mode : "system";
   localStorage.setItem(LANGUAGE_STORAGE_KEY, languageMode);
@@ -500,6 +506,7 @@ function showSettings() {
 
 function clearForm() {
   showConnectionEditor();
+  setConnectionError();
   $("connectionId").value = "";
   $("name").value = "";
   $("host").value = "";
@@ -552,6 +559,7 @@ function hideConnectionMenu() {
 
 function loadConnection(connection) {
   showConnectionEditor();
+  setConnectionError();
   fillConnectionForm(connection);
   setTerminalFocus(false);
   renderList();
@@ -564,6 +572,7 @@ async function refreshConnections() {
 }
 
 async function saveConnection() {
+  setConnectionError();
   const saved = await api.saveConnection(formConnection());
   await refreshConnections();
   loadConnection(saved);
@@ -573,6 +582,7 @@ async function saveConnection() {
 async function connect(connectionOverride) {
   if (!connectionOverride && !$("connectionForm").reportValidity()) return;
 
+  setConnectionError();
   const connection = connectionOverride || formConnection();
   const sessionId = crypto.randomUUID();
   const session = createTerminalSession(sessionId, connection);
@@ -601,8 +611,11 @@ async function connect(connectionOverride) {
     }
     fitAndResize();
   } catch (error) {
+    const message = error.message || String(error);
+    const detail = t("connectionFailedDetail", { message });
     setStatus("connectionFailed");
-    session.terminal.writeln(`\r\n${t("connectionFailedDetail", { message: error.message })}`);
+    setConnectionError(detail);
+    session.terminal.writeln(`\r\n${detail}`);
   }
 }
 
@@ -705,6 +718,7 @@ $("chooseKey").addEventListener("click", async () => {
 $("deleteConnection").addEventListener("click", async () => {
   const id = $("connectionId").value;
   if (!id) return;
+  setConnectionError();
   connections = await api.deleteConnection(id);
   clearForm();
   await refreshConnections();
