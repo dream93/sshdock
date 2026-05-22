@@ -604,17 +604,6 @@ button {
   font-weight: 600;
 }
 
-.file-row.dragging {
-  opacity: 0.5;
-}
-
-.file-row.drag-ready .file-icon::after {
-  content: "↧";
-  margin-left: 4px;
-  color: var(--accent, #4a9eff);
-  font-size: 10px;
-}
-
 .file-panel-status {
   display: flex;
   align-items: center;

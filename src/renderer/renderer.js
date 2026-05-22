@@ -20,8 +20,6 @@ let activeConnectionMenuId = "";
 const terminalSessions = new Map();
 const uploadProgress = new Map();
 const downloadProgress = new Map();
-const dragReady = new Map();
-const dragInFlight = new Map();
 const sessionRemotePath = new Map();
 let filePanelOpen = false;
 let filePanelLoading = false;
@@ -102,8 +100,14 @@ const messages = {
     fileListError: "Failed to list: {message}",
     preparingDownload: "Preparing {fileName}...",
     downloading: "Downloading {fileName} {percent}%",
-    downloadReady: "{fileName} ready — drag again to drop into your file manager",
+    downloadDone: "{fileName} downloaded.",
     downloadFailed: "Download failed: {message}",
+    menuDownloadFile: "Download to…",
+    menuDownloadDir: "Download folder to…",
+    menuDelete: "Delete",
+    chooseFolderTitle: "Choose folder for {name}",
+    chooseFolderBtn: "Save here",
+    overwriteConfirm: "{name} already exists in the chosen folder. Overwrite?",
     confirmDelete: "Delete {name}?",
     deleteFailed: "Delete failed: {message}",
     mkdirFailed: "Create folder failed: {message}"
@@ -183,8 +187,14 @@ const messages = {
     fileListError: "列出失败：{message}",
     preparingDownload: "正在准备 {fileName}...",
     downloading: "下载 {fileName} {percent}%",
-    downloadReady: "{fileName} 已就绪，再次拖拽即可放入本地文件夹",
+    downloadDone: "{fileName} 下载完成。",
     downloadFailed: "下载失败：{message}",
+    menuDownloadFile: "下载到…",
+    menuDownloadDir: "下载文件夹到…",
+    menuDelete: "删除",
+    chooseFolderTitle: "选择保存 {name} 的目录",
+    chooseFolderBtn: "保存到这里",
+    overwriteConfirm: "目标目录已存在 {name}，是否覆盖？",
     confirmDelete: "确认删除 {name}？",
     deleteFailed: "删除失败：{message}",
     mkdirFailed: "新建文件夹失败：{message}"
@@ -426,9 +436,6 @@ function removeTerminalSession(sessionId) {
   sessionRemotePath.delete(sessionId);
   uploadProgress.clear();
   downloadProgress.clear();
-  const dragPrefix = `${sessionId}::`;
-  for (const key of dragReady.keys()) if (key.startsWith(dragPrefix)) dragReady.delete(key);
-  for (const key of dragInFlight.keys()) if (key.startsWith(dragPrefix)) dragInFlight.delete(key);
   session.terminal.dispose();
   session.pane.remove();
 
@@ -809,7 +816,6 @@ function renderFileList(state) {
     if (entry.name === "." || entry.name === "..") continue;
     const row = document.createElement("div");
     row.className = `file-row ${entry.isDirectory ? "dir" : "file"}`;
-    row.draggable = true;
     const remotePath = joinRemote(state.path, entry.name);
     row.dataset.path = remotePath;
     row.dataset.name = entry.name;
@@ -830,52 +836,23 @@ function renderFileList(state) {
     row.addEventListener("contextmenu", async (event) => {
       event.preventDefault();
       if (!activeSessionId) return;
-      if (!window.confirm(t("confirmDelete", { name: entry.name }))) return;
-      try {
-        await api.removeRemote({ sessionId: activeSessionId, remotePath });
-        await refreshFilePanel();
-      } catch (error) {
-        setFilePanelStatus("deleteFailed", { message: error.message });
-      }
-    });
-
-    const dragKey = `${activeSessionId}::${remotePath}`;
-    if (dragReady.has(dragKey)) row.classList.add("drag-ready");
-
-    row.addEventListener("dragstart", (event) => {
-      if (!activeSessionId) return;
-      const key = `${activeSessionId}::${remotePath}`;
-      if (dragReady.has(key)) {
-        api.startRemoteDrag({ sessionId: activeSessionId, remotePath });
-        return;
-      }
-      event.preventDefault();
-      if (dragInFlight.has(key)) {
-        setFilePanelStatus("preparingDownload", { fileName: entry.name });
-        return;
-      }
-      row.classList.add("dragging");
-      setFilePanelStatus("preparingDownload", { fileName: entry.name });
-      const prefetch = api.prefetchRemoteDrag({
-        sessionId: activeSessionId,
-        remotePath,
-        name: entry.name
+      const action = await api.showFileMenu({
+        labels: {
+          download: t(entry.isDirectory ? "menuDownloadDir" : "menuDownloadFile"),
+          delete: t("menuDelete")
+        }
       });
-      dragInFlight.set(key, prefetch);
-      prefetch
-        .then(() => {
-          dragReady.set(key, true);
-          row.classList.remove("dragging");
-          row.classList.add("drag-ready");
-          setFilePanelStatus("downloadReady", { fileName: entry.name });
-        })
-        .catch((error) => {
-          row.classList.remove("dragging");
-          setFilePanelStatus("downloadFailed", { message: error.message });
-        })
-        .finally(() => {
-          dragInFlight.delete(key);
-        });
+      if (action === "download") {
+        await handleDownloadEntry(entry, remotePath);
+      } else if (action === "delete") {
+        if (!window.confirm(t("confirmDelete", { name: entry.name }))) return;
+        try {
+          await api.removeRemote({ sessionId: activeSessionId, remotePath });
+          await refreshFilePanel();
+        } catch (error) {
+          setFilePanelStatus("deleteFailed", { message: error.message });
+        }
+      }
     });
 
     list.appendChild(row);
@@ -910,6 +887,49 @@ async function refreshFilePanel() {
   if (!activeSessionId) return;
   const current = sessionRemotePath.get(activeSessionId) || "";
   await loadRemotePath(current);
+}
+
+async function handleDownloadEntry(entry, remotePath) {
+  if (!activeSessionId) return;
+  const folder = await api.chooseDownloadFolder({
+    title: t("chooseFolderTitle", { name: entry.name }),
+    buttonLabel: t("chooseFolderBtn")
+  });
+  if (!folder) return;
+  setFilePanelStatus("preparingDownload", { fileName: entry.name });
+  try {
+    const result = await api.downloadRemoteTo({
+      sessionId: activeSessionId,
+      remotePath,
+      name: entry.name,
+      localFolder: folder
+    });
+    setFilePanelStatus("downloadDone", { fileName: entry.name });
+    api.revealInFolder(result.localPath);
+  } catch (error) {
+    if (error?.code === "EEXIST" || /already exists/i.test(error?.message || "")) {
+      if (window.confirm(t("overwriteConfirm", { name: entry.name }))) {
+        try {
+          const result = await api.downloadRemoteTo({
+            sessionId: activeSessionId,
+            remotePath,
+            name: entry.name,
+            localFolder: folder,
+            overwrite: true
+          });
+          setFilePanelStatus("downloadDone", { fileName: entry.name });
+          api.revealInFolder(result.localPath);
+          return;
+        } catch (retryError) {
+          setFilePanelStatus("downloadFailed", { message: retryError.message });
+          return;
+        }
+      }
+      setFilePanelStatus("");
+      return;
+    }
+    setFilePanelStatus("downloadFailed", { message: error.message });
+  }
 }
 
 function openFilePanel() {
