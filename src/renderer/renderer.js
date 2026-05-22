@@ -19,6 +19,10 @@ let activeSessionConnectionId = "";
 let activeConnectionMenuId = "";
 const terminalSessions = new Map();
 const uploadProgress = new Map();
+const downloadProgress = new Map();
+const sessionRemotePath = new Map();
+let filePanelOpen = false;
+let filePanelLoading = false;
 
 const messages = {
   en: {
@@ -85,7 +89,22 @@ const messages = {
     closed: "Closed",
     sessionClosed: "Session closed.",
     error: "Error",
-    dropFilesToUpload: "Drop files to upload"
+    dropFilesToUpload: "Drop files to upload",
+    files: "Files",
+    home: "Home",
+    parentDir: "Up",
+    refresh: "Refresh",
+    newFolder: "New folder",
+    newFolderPrompt: "Folder name",
+    fileListEmpty: "Empty",
+    fileListError: "Failed to list: {message}",
+    preparingDownload: "Preparing {fileName}...",
+    downloading: "Downloading {fileName} {percent}%",
+    downloadReady: "Drag {fileName} to your file manager",
+    downloadFailed: "Download failed: {message}",
+    confirmDelete: "Delete {name}?",
+    deleteFailed: "Delete failed: {message}",
+    mkdirFailed: "Create folder failed: {message}"
   },
   "zh-CN": {
     brandSubtitle: "可视化 SSH 客户端",
@@ -151,7 +170,22 @@ const messages = {
     closed: "已关闭",
     sessionClosed: "会话已关闭。",
     error: "错误",
-    dropFilesToUpload: "拖放文件以上传"
+    dropFilesToUpload: "拖放文件以上传",
+    files: "文件",
+    home: "家目录",
+    parentDir: "上一级",
+    refresh: "刷新",
+    newFolder: "新建文件夹",
+    newFolderPrompt: "文件夹名称",
+    fileListEmpty: "空目录",
+    fileListError: "列出失败：{message}",
+    preparingDownload: "正在准备 {fileName}...",
+    downloading: "下载 {fileName} {percent}%",
+    downloadReady: "可以将 {fileName} 拖到本地",
+    downloadFailed: "下载失败：{message}",
+    confirmDelete: "确认删除 {name}？",
+    deleteFailed: "删除失败：{message}",
+    mkdirFailed: "新建文件夹失败：{message}"
   }
 };
 
@@ -195,6 +229,10 @@ function applyLanguage(mode) {
 
   for (const element of document.querySelectorAll("[data-i18n-placeholder]")) {
     element.placeholder = t(element.dataset.i18nPlaceholder);
+  }
+
+  for (const element of document.querySelectorAll("[data-i18n-title]")) {
+    element.title = t(element.dataset.i18nTitle);
   }
 
   if (!activeConnectionId) $("formTitle").textContent = t("connection");
@@ -349,7 +387,10 @@ function updateTerminalActions() {
   const session = terminalSessions.get(activeSessionId);
   $("toolbarDisconnect").classList.toggle("hidden", !session);
   $("popOutTerminal").classList.toggle("hidden", !session);
+  $("toggleFilePanel").classList.toggle("hidden", !session);
   if (session) $("popOutTerminal").textContent = t(session.detached ? "showPopOut" : "popOut");
+  if (!session) closeFilePanel();
+  else if (filePanelOpen) openFilePanel();
 }
 
 function selectTerminalSession(sessionId) {
@@ -380,7 +421,9 @@ function removeTerminalSession(sessionId) {
   const session = terminalSessions.get(sessionId);
   if (!session) return;
   terminalSessions.delete(sessionId);
+  sessionRemotePath.delete(sessionId);
   uploadProgress.clear();
+  downloadProgress.clear();
   session.terminal.dispose();
   session.pane.remove();
 
@@ -666,7 +709,7 @@ function fileSizeLabel(bytes) {
   return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
 }
 
-async function uploadDroppedFiles(files) {
+async function uploadDroppedFiles(files, remoteDir = "") {
   if (!activeSessionId) {
     setStatus("connectBeforeUploading");
     terminal.writeln(`\r\n${t("connectBeforeDropping")}`);
@@ -682,7 +725,8 @@ async function uploadDroppedFiles(files) {
     try {
       const result = await api.uploadFile({
         sessionId: activeSessionId,
-        localPath: file.path
+        localPath: file.path,
+        remoteDir
       });
       setStatus("uploaded", { fileName: result.fileName });
       terminal.writeln(`\r\n${t("uploadedDetail", { fileName: result.fileName, remotePath: result.remotePath, size: fileSizeLabel(result.size) })}`);
@@ -691,6 +735,8 @@ async function uploadDroppedFiles(files) {
       terminal.writeln(`\r\n${t("uploadFailedDetail", { message: error.message })}`);
     }
   }
+
+  if (filePanelOpen) await refreshFilePanel();
 }
 
 $("connectionForm").addEventListener("submit", async (event) => {
@@ -735,6 +781,190 @@ systemThemeQuery.addEventListener("change", () => {
   if (themeMode === "system") applyTheme("system");
 });
 
+function setFilePanelStatus(key, values = {}) {
+  const el = $("filePanelStatus");
+  el.dataset.statusKey = key;
+  el.dataset.statusValues = JSON.stringify(values);
+  el.textContent = key ? t(key, values) : "";
+}
+
+function renderFileList(state) {
+  const list = $("filePanelList");
+  list.innerHTML = "";
+
+  if (!state.entries || state.entries.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "file-panel-empty";
+    empty.textContent = t("fileListEmpty");
+    list.appendChild(empty);
+    return;
+  }
+
+  for (const entry of state.entries) {
+    if (entry.name === "." || entry.name === "..") continue;
+    const row = document.createElement("div");
+    row.className = `file-row ${entry.isDirectory ? "dir" : "file"}`;
+    row.draggable = true;
+    const remotePath = joinRemote(state.path, entry.name);
+    row.dataset.path = remotePath;
+    row.dataset.name = entry.name;
+    row.dataset.dir = entry.isDirectory ? "1" : "";
+
+    row.innerHTML = `
+      <span class="file-icon">${entry.isDirectory ? "📁" : "📄"}</span>
+      <span class="file-name"></span>
+      <span class="file-meta"></span>
+    `;
+    row.querySelector(".file-name").textContent = entry.name;
+    row.querySelector(".file-meta").textContent = entry.isDirectory ? "" : fileSizeLabel(entry.size);
+
+    row.addEventListener("dblclick", () => {
+      if (entry.isDirectory) loadRemotePath(remotePath);
+    });
+
+    row.addEventListener("contextmenu", async (event) => {
+      event.preventDefault();
+      if (!activeSessionId) return;
+      if (!window.confirm(t("confirmDelete", { name: entry.name }))) return;
+      try {
+        await api.removeRemote({ sessionId: activeSessionId, remotePath });
+        await refreshFilePanel();
+      } catch (error) {
+        setFilePanelStatus("deleteFailed", { message: error.message });
+      }
+    });
+
+    row.addEventListener("dragstart", async (event) => {
+      if (!activeSessionId) return;
+      event.preventDefault();
+      row.classList.add("dragging");
+      setFilePanelStatus("preparingDownload", { fileName: entry.name });
+      try {
+        await api.startRemoteDrag({
+          sessionId: activeSessionId,
+          remotePath,
+          name: entry.name
+        });
+        setFilePanelStatus("downloadReady", { fileName: entry.name });
+      } catch (error) {
+        setFilePanelStatus("downloadFailed", { message: error.message });
+      } finally {
+        row.classList.remove("dragging");
+      }
+    });
+
+    list.appendChild(row);
+  }
+}
+
+function joinRemote(base, name) {
+  if (!base || base === "/") return `/${name}`;
+  return `${base.replace(/\/$/, "")}/${name}`;
+}
+
+async function loadRemotePath(remotePath) {
+  if (!activeSessionId || filePanelLoading) return;
+  filePanelLoading = true;
+  try {
+    const state = await api.listRemoteDir({
+      sessionId: activeSessionId,
+      remotePath: remotePath || sessionRemotePath.get(activeSessionId) || ""
+    });
+    sessionRemotePath.set(activeSessionId, state.path);
+    $("filePanelPath").value = state.path;
+    renderFileList(state);
+    setFilePanelStatus("");
+  } catch (error) {
+    setFilePanelStatus("fileListError", { message: error.message });
+  } finally {
+    filePanelLoading = false;
+  }
+}
+
+async function refreshFilePanel() {
+  if (!activeSessionId) return;
+  const current = sessionRemotePath.get(activeSessionId) || "";
+  await loadRemotePath(current);
+}
+
+function openFilePanel() {
+  if (!activeSessionId) return;
+  filePanelOpen = true;
+  $("filePanel").classList.remove("hidden");
+  document.querySelector(".terminal-area").classList.add("with-files");
+  $("toggleFilePanel").classList.add("active");
+  loadRemotePath(sessionRemotePath.get(activeSessionId) || "");
+  requestAnimationFrame(fitAndResize);
+}
+
+function closeFilePanel() {
+  filePanelOpen = false;
+  $("filePanel").classList.add("hidden");
+  document.querySelector(".terminal-area").classList.remove("with-files");
+  $("toggleFilePanel").classList.remove("active");
+  requestAnimationFrame(fitAndResize);
+}
+
+function toggleFilePanel() {
+  if (filePanelOpen) closeFilePanel();
+  else openFilePanel();
+}
+
+$("toggleFilePanel").addEventListener("click", toggleFilePanel);
+$("filePanelRefresh").addEventListener("click", refreshFilePanel);
+$("filePanelHome").addEventListener("click", async () => {
+  if (!activeSessionId) return;
+  try {
+    const home = await api.remoteHome(activeSessionId);
+    await loadRemotePath(home);
+  } catch (error) {
+    setFilePanelStatus("fileListError", { message: error.message });
+  }
+});
+$("filePanelUp").addEventListener("click", async () => {
+  const current = sessionRemotePath.get(activeSessionId) || "/";
+  if (current === "/" || current === "") return;
+  const parent = current.replace(/\/+$/g, "").split("/").slice(0, -1).join("/") || "/";
+  await loadRemotePath(parent);
+});
+$("filePanelPath").addEventListener("keydown", async (event) => {
+  if (event.key !== "Enter") return;
+  await loadRemotePath($("filePanelPath").value.trim());
+});
+$("filePanelMkdir").addEventListener("click", async () => {
+  if (!activeSessionId) return;
+  const name = window.prompt(t("newFolderPrompt"));
+  if (!name) return;
+  try {
+    await api.makeRemoteDir({
+      sessionId: activeSessionId,
+      remoteDir: sessionRemotePath.get(activeSessionId) || "",
+      name: name.trim()
+    });
+    await refreshFilePanel();
+  } catch (error) {
+    setFilePanelStatus("mkdirFailed", { message: error.message });
+  }
+});
+
+const fileListEl = $("filePanelList");
+fileListEl.addEventListener("dragover", (event) => {
+  if (!activeSessionId) return;
+  if (event.dataTransfer.types.includes("Files")) {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    fileListEl.classList.add("drop-target");
+  }
+});
+fileListEl.addEventListener("dragleave", (event) => {
+  if (event.target === fileListEl) fileListEl.classList.remove("drop-target");
+});
+fileListEl.addEventListener("drop", async (event) => {
+  event.preventDefault();
+  fileListEl.classList.remove("drop-target");
+  await uploadDroppedFiles(event.dataTransfer.files, sessionRemotePath.get(activeSessionId) || "");
+});
+
 $("terminal").addEventListener("dragover", (event) => {
   event.preventDefault();
   event.dataTransfer.dropEffect = activeSessionId ? "copy" : "none";
@@ -748,7 +978,7 @@ $("terminal").addEventListener("dragleave", () => {
 $("terminal").addEventListener("drop", async (event) => {
   event.preventDefault();
   $("terminal").closest(".terminal-panel").classList.remove("drag-over");
-  await uploadDroppedFiles(event.dataTransfer.files);
+  await uploadDroppedFiles(event.dataTransfer.files, sessionRemotePath.get(activeSessionId) || "");
 });
 
 api.onData(({ sessionId, data }) => {
@@ -765,6 +995,14 @@ api.onUploadProgress(({ sessionId, uploadId, fileName, transferred, total }) => 
   session.statusKey = "uploadingPercent";
   session.statusValues = { fileName, percent };
   if (sessionId === activeSessionId) setStatus("uploadingPercent", { fileName, percent });
+});
+
+api.onDownloadProgress(({ sessionId, downloadId, fileName, transferred, total }) => {
+  if (sessionId !== activeSessionId || !total) return;
+  const percent = Math.floor((transferred / total) * 100);
+  if (downloadProgress.get(downloadId) === percent) return;
+  downloadProgress.set(downloadId, percent);
+  setFilePanelStatus("downloading", { fileName, percent });
 });
 
 api.onClosed(({ sessionId }) => {

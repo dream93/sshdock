@@ -1,13 +1,16 @@
-const { app, BrowserWindow, dialog, ipcMain, safeStorage } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, nativeImage, safeStorage } = require("electron");
 const path = require("path");
 const fs = require("fs");
+const os = require("os");
 const crypto = require("crypto");
 const { Client } = require("ssh2");
 
 let mainWindow;
 const sessions = new Map();
 const terminalWindows = new Map();
+const dragTempDirs = new Set();
 const MAX_SESSION_HISTORY = 200000;
+let cachedDragIcon;
 
 function posixJoin(...parts) {
   return parts
@@ -200,11 +203,17 @@ app.whenReady().then(createWindow);
 
 app.on("window-all-closed", () => {
   for (const session of sessions.values()) {
+    closeSftp(session);
     session.stream?.end();
     session.client?.end();
   }
   terminalWindows.clear();
+  cleanupDragTempDirs();
   if (process.platform !== "darwin") app.quit();
+});
+
+app.on("will-quit", () => {
+  cleanupDragTempDirs();
 });
 
 app.on("activate", () => {
@@ -306,6 +315,8 @@ ipcMain.handle("ssh:connect", async (_event, payload) => {
           });
 
           stream.on("close", () => {
+            const closing = sessions.get(sessionId);
+            if (closing) closeSftp(closing);
             sessions.delete(sessionId);
             sendSessionEvent(sessionId, "ssh:closed", { sessionId });
             closeTerminalWindows(sessionId);
@@ -317,11 +328,15 @@ ipcMain.handle("ssh:connect", async (_event, payload) => {
         });
       })
       .on("error", (error) => {
+        const failing = sessions.get(sessionId);
+        if (failing) closeSftp(failing);
         sessions.delete(sessionId);
         if (!settled) reject(error);
         else sendSessionEvent(sessionId, "ssh:error", { sessionId, message: error.message });
       })
       .on("close", () => {
+        const closing = sessions.get(sessionId);
+        if (closing) closeSftp(closing);
         sessions.delete(sessionId);
         sendSessionEvent(sessionId, "ssh:closed", { sessionId });
         closeTerminalWindows(sessionId);
@@ -345,6 +360,7 @@ ipcMain.on("ssh:resize", (_event, payload) => {
 ipcMain.handle("ssh:disconnect", (_event, sessionId) => {
   const session = sessions.get(sessionId);
   if (session) {
+    closeSftp(session);
     session.stream?.end();
     session.client?.end();
     sessions.delete(sessionId);
@@ -353,58 +369,379 @@ ipcMain.handle("ssh:disconnect", (_event, sessionId) => {
   return true;
 });
 
+function closeSftp(session) {
+  if (session?.sftp) {
+    try { session.sftp.end(); } catch {}
+    session.sftp = null;
+  }
+}
+
+async function getSftp(session) {
+  if (session.sftp) return session.sftp;
+  const sftp = await new Promise((resolve, reject) => {
+    session.client.sftp((error, client) => {
+      if (error) reject(error);
+      else resolve(client);
+    });
+  });
+  const clear = () => { if (session.sftp === sftp) session.sftp = null; };
+  sftp.on("end", clear);
+  sftp.on("close", clear);
+  session.sftp = sftp;
+  return sftp;
+}
+
+function sftpRealpath(sftp, p) {
+  return new Promise((resolve) => {
+    sftp.realpath(p, (error, abs) => resolve(error ? p : abs));
+  });
+}
+
+function sftpStat(sftp, p) {
+  return new Promise((resolve, reject) => {
+    sftp.stat(p, (error, attrs) => error ? reject(error) : resolve(attrs));
+  });
+}
+
+function sftpReaddir(sftp, p) {
+  return new Promise((resolve, reject) => {
+    sftp.readdir(p, (error, list) => error ? reject(error) : resolve(list));
+  });
+}
+
+function sftpMkdir(sftp, p) {
+  return new Promise((resolve) => {
+    sftp.mkdir(p, () => resolve());
+  });
+}
+
+function normalizeRemotePath(target) {
+  if (!target) return ".";
+  let trimmed = String(target).replace(/\/+$/g, "");
+  if (!trimmed) return "/";
+  return trimmed;
+}
+
+function parentPosix(target) {
+  if (!target || target === "/") return "/";
+  const trimmed = target.replace(/\/+$/g, "");
+  const idx = trimmed.lastIndexOf("/");
+  if (idx <= 0) return "/";
+  return trimmed.slice(0, idx);
+}
+
+function computeLocalSize(localPath) {
+  const stat = fs.statSync(localPath);
+  if (stat.isFile()) return stat.size;
+  if (stat.isDirectory()) {
+    let total = 0;
+    for (const item of fs.readdirSync(localPath, { withFileTypes: true })) {
+      try {
+        total += computeLocalSize(path.join(localPath, item.name));
+      } catch {}
+    }
+    return total;
+  }
+  return 0;
+}
+
+async function computeRemoteSize(sftp, remotePath) {
+  const attrs = await sftpStat(sftp, remotePath);
+  if (attrs.isDirectory()) {
+    const entries = await sftpReaddir(sftp, remotePath);
+    let total = 0;
+    for (const entry of entries) {
+      if (entry.attrs.isDirectory()) {
+        total += await computeRemoteSize(sftp, posixJoin(remotePath, entry.filename));
+      } else if (entry.attrs.isFile()) {
+        total += entry.attrs.size;
+      }
+    }
+    return total;
+  }
+  return attrs.size;
+}
+
+async function uploadFileSftp(sftp, localPath, remotePath, ctx) {
+  await new Promise((resolve, reject) => {
+    sftp.fastPut(localPath, remotePath, {
+      step: (transferred) => {
+        sendSessionEvent(ctx.sessionId, "ssh:upload-progress", {
+          sessionId: ctx.sessionId,
+          uploadId: ctx.uploadId,
+          fileName: ctx.displayName,
+          transferred: ctx.progress.bytes + transferred,
+          total: ctx.totalSize,
+          remotePath: ctx.rootRemotePath
+        });
+      }
+    }, (error) => error ? reject(error) : resolve());
+  });
+  ctx.progress.bytes += fs.statSync(localPath).size;
+}
+
+async function uploadDirRecursive(sftp, localDir, remoteDir, ctx) {
+  await sftpMkdir(sftp, remoteDir);
+  for (const item of fs.readdirSync(localDir, { withFileTypes: true })) {
+    const childLocal = path.join(localDir, item.name);
+    const childRemote = posixJoin(remoteDir, item.name);
+    if (item.isDirectory()) {
+      await uploadDirRecursive(sftp, childLocal, childRemote, ctx);
+    } else if (item.isFile()) {
+      await uploadFileSftp(sftp, childLocal, childRemote, ctx);
+    }
+  }
+}
+
+async function downloadFileSftp(sftp, remotePath, localPath, ctx) {
+  fs.mkdirSync(path.dirname(localPath), { recursive: true });
+  await new Promise((resolve, reject) => {
+    sftp.fastGet(remotePath, localPath, {
+      step: (transferred) => {
+        sendSessionEvent(ctx.sessionId, "ssh:download-progress", {
+          sessionId: ctx.sessionId,
+          downloadId: ctx.downloadId,
+          fileName: ctx.displayName,
+          transferred: ctx.progress.bytes + transferred,
+          total: ctx.totalSize,
+          localPath: ctx.rootLocalPath
+        });
+      }
+    }, (error) => error ? reject(error) : resolve());
+  });
+  try { ctx.progress.bytes += fs.statSync(localPath).size; } catch {}
+}
+
+async function downloadDirRecursive(sftp, remoteDir, localDir, ctx) {
+  fs.mkdirSync(localDir, { recursive: true });
+  const entries = await sftpReaddir(sftp, remoteDir);
+  for (const entry of entries) {
+    const childRemote = posixJoin(remoteDir, entry.filename);
+    const childLocal = path.join(localDir, entry.filename);
+    if (entry.attrs.isDirectory()) {
+      await downloadDirRecursive(sftp, childRemote, childLocal, ctx);
+    } else if (entry.attrs.isFile()) {
+      await downloadFileSftp(sftp, childRemote, childLocal, ctx);
+    }
+  }
+}
+
+function getDragIcon() {
+  if (cachedDragIcon && !cachedDragIcon.isEmpty()) return cachedDragIcon;
+  const candidates = [
+    path.join(__dirname, "renderer", "assets", "icon.png"),
+    path.join(__dirname, "..", "build", "icon.png")
+  ];
+  for (const candidate of candidates) {
+    try {
+      const image = nativeImage.createFromPath(candidate);
+      if (!image.isEmpty()) {
+        cachedDragIcon = image.resize({ width: 32, height: 32 });
+        return cachedDragIcon;
+      }
+    } catch {}
+  }
+  cachedDragIcon = nativeImage.createFromBuffer(
+    Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAH0lEQVR42mNk+M9AAGAcVTiqcFThqMJRhaMKRxUONwAAfQEBkGtbVPYAAAAASUVORK5CYII=",
+      "base64"
+    )
+  );
+  return cachedDragIcon;
+}
+
+function cleanupDragTempDirs() {
+  for (const dir of dragTempDirs) {
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
+  }
+  dragTempDirs.clear();
+}
+
+ipcMain.handle("ssh:listdir", async (_event, payload) => {
+  const session = sessions.get(payload?.sessionId);
+  if (!session?.client) throw new Error("No active SSH session.");
+  const sftp = await getSftp(session);
+
+  let target = normalizeRemotePath(payload?.remotePath);
+  target = await sftpRealpath(sftp, target);
+
+  const entries = await sftpReaddir(sftp, target);
+  const list = entries.map((entry) => ({
+    name: entry.filename,
+    isDirectory: entry.attrs.isDirectory(),
+    isSymbolicLink: entry.attrs.isSymbolicLink(),
+    size: Number(entry.attrs.size || 0),
+    mtime: Number(entry.attrs.mtime || 0) * 1000
+  }));
+  list.sort((a, b) => {
+    if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
+    return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" });
+  });
+
+  return { path: target, parent: parentPosix(target), entries: list };
+});
+
+ipcMain.handle("ssh:home", async (_event, payload) => {
+  const session = sessions.get(payload?.sessionId);
+  if (!session?.client) throw new Error("No active SSH session.");
+  const sftp = await getSftp(session);
+  return await sftpRealpath(sftp, ".");
+});
+
 ipcMain.handle("ssh:upload", async (_event, payload) => {
   const session = sessions.get(payload.sessionId);
   if (!session?.client) throw new Error("No active SSH session.");
 
   const localPath = String(payload.localPath || "");
   const stat = fs.statSync(localPath);
-  if (!stat.isFile()) throw new Error("Only single files are supported for drag upload.");
+  if (!stat.isFile() && !stat.isDirectory()) {
+    throw new Error("Only files and folders are supported.");
+  }
 
-  const fileName = path.basename(localPath);
+  const sftp = await getSftp(session);
+  const displayName = path.basename(localPath);
+  const remoteDir = payload.remoteDir
+    ? await sftpRealpath(sftp, normalizeRemotePath(payload.remoteDir))
+    : await sftpRealpath(sftp, ".");
+  const rootRemotePath = posixJoin(remoteDir, displayName);
   const uploadId = crypto.randomUUID();
-
-  const sftp = await new Promise((resolve, reject) => {
-    session.client.sftp((error, sftpClient) => {
-      if (error) reject(error);
-      else resolve(sftpClient);
-    });
-  });
-
-  const remoteRoot = await new Promise((resolve) => {
-    sftp.realpath(".", (error, absolutePath) => {
-      resolve(error ? "." : absolutePath);
-    });
-  });
-  const remotePath = posixJoin(remoteRoot, fileName);
+  const totalSize = computeLocalSize(localPath);
+  const ctx = {
+    sessionId: payload.sessionId,
+    uploadId,
+    displayName,
+    totalSize,
+    rootRemotePath,
+    progress: { bytes: 0 }
+  };
 
   sendSessionEvent(payload.sessionId, "ssh:upload-progress", {
     sessionId: payload.sessionId,
     uploadId,
-    fileName,
+    fileName: displayName,
     transferred: 0,
-    total: stat.size,
-    remotePath
+    total: totalSize,
+    remotePath: rootRemotePath
   });
 
-  await new Promise((resolve, reject) => {
-    sftp.fastPut(localPath, remotePath, {
-      step: (transferred, _chunk, total) => {
-        sendSessionEvent(payload.sessionId, "ssh:upload-progress", {
-          sessionId: payload.sessionId,
-          uploadId,
-          fileName,
-          transferred,
-          total,
-          remotePath
-        });
-      }
-    }, (error) => {
-      sftp.end();
-      if (error) reject(error);
-      else resolve();
-    });
+  if (stat.isDirectory()) {
+    await uploadDirRecursive(sftp, localPath, rootRemotePath, ctx);
+  } else {
+    await uploadFileSftp(sftp, localPath, rootRemotePath, ctx);
+  }
+
+  sendSessionEvent(payload.sessionId, "ssh:upload-progress", {
+    sessionId: payload.sessionId,
+    uploadId,
+    fileName: displayName,
+    transferred: totalSize,
+    total: totalSize,
+    remotePath: rootRemotePath
   });
 
-  return { uploadId, fileName, remotePath, size: stat.size };
+  return {
+    uploadId,
+    fileName: displayName,
+    remotePath: rootRemotePath,
+    size: totalSize,
+    isDirectory: stat.isDirectory()
+  };
 });
+
+ipcMain.handle("ssh:start-drag", async (event, payload) => {
+  const session = sessions.get(payload?.sessionId);
+  if (!session?.client) throw new Error("No active SSH session.");
+  const sftp = await getSftp(session);
+  const remotePath = normalizeRemotePath(payload.remotePath);
+  const attrs = await sftpStat(sftp, remotePath);
+  const displayName = String(payload.name || path.posix.basename(remotePath) || "download");
+
+  const tempBase = fs.mkdtempSync(path.join(os.tmpdir(), "sshdock-drag-"));
+  dragTempDirs.add(tempBase);
+  const rootLocalPath = path.join(tempBase, displayName);
+  const downloadId = crypto.randomUUID();
+  const totalSize = attrs.isDirectory() ? await computeRemoteSize(sftp, remotePath) : Number(attrs.size || 0);
+  const ctx = {
+    sessionId: payload.sessionId,
+    downloadId,
+    displayName,
+    totalSize,
+    rootLocalPath,
+    progress: { bytes: 0 }
+  };
+
+  sendSessionEvent(payload.sessionId, "ssh:download-progress", {
+    sessionId: payload.sessionId,
+    downloadId,
+    fileName: displayName,
+    transferred: 0,
+    total: totalSize,
+    localPath: rootLocalPath
+  });
+
+  try {
+    if (attrs.isDirectory()) {
+      await downloadDirRecursive(sftp, remotePath, rootLocalPath, ctx);
+    } else {
+      await downloadFileSftp(sftp, remotePath, rootLocalPath, ctx);
+    }
+  } catch (error) {
+    try { fs.rmSync(tempBase, { recursive: true, force: true }); } catch {}
+    dragTempDirs.delete(tempBase);
+    throw error;
+  }
+
+  sendSessionEvent(payload.sessionId, "ssh:download-progress", {
+    sessionId: payload.sessionId,
+    downloadId,
+    fileName: displayName,
+    transferred: totalSize,
+    total: totalSize,
+    localPath: rootLocalPath
+  });
+
+  event.sender.startDrag({ file: rootLocalPath, icon: getDragIcon() });
+  return { downloadId, localPath: rootLocalPath, size: totalSize, isDirectory: attrs.isDirectory() };
+});
+
+ipcMain.handle("ssh:mkdir", async (_event, payload) => {
+  const session = sessions.get(payload?.sessionId);
+  if (!session?.client) throw new Error("No active SSH session.");
+  const sftp = await getSftp(session);
+  const parent = await sftpRealpath(sftp, normalizeRemotePath(payload.remoteDir));
+  const target = posixJoin(parent, String(payload.name || "").trim());
+  await new Promise((resolve, reject) => {
+    sftp.mkdir(target, (error) => error ? reject(error) : resolve());
+  });
+  return target;
+});
+
+ipcMain.handle("ssh:rm", async (_event, payload) => {
+  const session = sessions.get(payload?.sessionId);
+  if (!session?.client) throw new Error("No active SSH session.");
+  const sftp = await getSftp(session);
+  const target = normalizeRemotePath(payload.remotePath);
+  const attrs = await sftpStat(sftp, target);
+  if (attrs.isDirectory()) {
+    await removeRemoteDir(sftp, target);
+  } else {
+    await new Promise((resolve, reject) => {
+      sftp.unlink(target, (error) => error ? reject(error) : resolve());
+    });
+  }
+  return true;
+});
+
+async function removeRemoteDir(sftp, target) {
+  const entries = await sftpReaddir(sftp, target);
+  for (const entry of entries) {
+    const child = posixJoin(target, entry.filename);
+    if (entry.attrs.isDirectory()) await removeRemoteDir(sftp, child);
+    else await new Promise((resolve, reject) => {
+      sftp.unlink(child, (error) => error ? reject(error) : resolve());
+    });
+  }
+  await new Promise((resolve, reject) => {
+    sftp.rmdir(target, (error) => error ? reject(error) : resolve());
+  });
+}
