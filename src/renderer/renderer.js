@@ -20,6 +20,8 @@ let activeConnectionMenuId = "";
 const terminalSessions = new Map();
 const uploadProgress = new Map();
 const downloadProgress = new Map();
+const dragReady = new Map();
+const dragInFlight = new Map();
 const sessionRemotePath = new Map();
 let filePanelOpen = false;
 let filePanelLoading = false;
@@ -100,7 +102,7 @@ const messages = {
     fileListError: "Failed to list: {message}",
     preparingDownload: "Preparing {fileName}...",
     downloading: "Downloading {fileName} {percent}%",
-    downloadReady: "Drag {fileName} to your file manager",
+    downloadReady: "{fileName} ready — drag again to drop into your file manager",
     downloadFailed: "Download failed: {message}",
     confirmDelete: "Delete {name}?",
     deleteFailed: "Delete failed: {message}",
@@ -181,7 +183,7 @@ const messages = {
     fileListError: "列出失败：{message}",
     preparingDownload: "正在准备 {fileName}...",
     downloading: "下载 {fileName} {percent}%",
-    downloadReady: "可以将 {fileName} 拖到本地",
+    downloadReady: "{fileName} 已就绪，再次拖拽即可放入本地文件夹",
     downloadFailed: "下载失败：{message}",
     confirmDelete: "确认删除 {name}？",
     deleteFailed: "删除失败：{message}",
@@ -424,6 +426,9 @@ function removeTerminalSession(sessionId) {
   sessionRemotePath.delete(sessionId);
   uploadProgress.clear();
   downloadProgress.clear();
+  const dragPrefix = `${sessionId}::`;
+  for (const key of dragReady.keys()) if (key.startsWith(dragPrefix)) dragReady.delete(key);
+  for (const key of dragInFlight.keys()) if (key.startsWith(dragPrefix)) dragInFlight.delete(key);
   session.terminal.dispose();
   session.pane.remove();
 
@@ -834,23 +839,43 @@ function renderFileList(state) {
       }
     });
 
-    row.addEventListener("dragstart", async (event) => {
+    const dragKey = `${activeSessionId}::${remotePath}`;
+    if (dragReady.has(dragKey)) row.classList.add("drag-ready");
+
+    row.addEventListener("dragstart", (event) => {
       if (!activeSessionId) return;
+      const key = `${activeSessionId}::${remotePath}`;
+      if (dragReady.has(key)) {
+        api.startRemoteDrag({ sessionId: activeSessionId, remotePath });
+        return;
+      }
       event.preventDefault();
+      if (dragInFlight.has(key)) {
+        setFilePanelStatus("preparingDownload", { fileName: entry.name });
+        return;
+      }
       row.classList.add("dragging");
       setFilePanelStatus("preparingDownload", { fileName: entry.name });
-      try {
-        await api.startRemoteDrag({
-          sessionId: activeSessionId,
-          remotePath,
-          name: entry.name
+      const prefetch = api.prefetchRemoteDrag({
+        sessionId: activeSessionId,
+        remotePath,
+        name: entry.name
+      });
+      dragInFlight.set(key, prefetch);
+      prefetch
+        .then(() => {
+          dragReady.set(key, true);
+          row.classList.remove("dragging");
+          row.classList.add("drag-ready");
+          setFilePanelStatus("downloadReady", { fileName: entry.name });
+        })
+        .catch((error) => {
+          row.classList.remove("dragging");
+          setFilePanelStatus("downloadFailed", { message: error.message });
+        })
+        .finally(() => {
+          dragInFlight.delete(key);
         });
-        setFilePanelStatus("downloadReady", { fileName: entry.name });
-      } catch (error) {
-        setFilePanelStatus("downloadFailed", { message: error.message });
-      } finally {
-        row.classList.remove("dragging");
-      }
     });
 
     list.appendChild(row);
