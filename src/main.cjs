@@ -9,6 +9,7 @@ let mainWindow;
 const sessions = new Map();
 const terminalWindows = new Map();
 const dragTempDirs = new Set();
+const dragPrefetchCache = new Map();
 const MAX_SESSION_HISTORY = 200000;
 let cachedDragIcon;
 
@@ -318,6 +319,7 @@ ipcMain.handle("ssh:connect", async (_event, payload) => {
             const closing = sessions.get(sessionId);
             if (closing) closeSftp(closing);
             sessions.delete(sessionId);
+            clearDragCacheForSession(sessionId);
             sendSessionEvent(sessionId, "ssh:closed", { sessionId });
             closeTerminalWindows(sessionId);
             client.end();
@@ -331,6 +333,7 @@ ipcMain.handle("ssh:connect", async (_event, payload) => {
         const failing = sessions.get(sessionId);
         if (failing) closeSftp(failing);
         sessions.delete(sessionId);
+        clearDragCacheForSession(sessionId);
         if (!settled) reject(error);
         else sendSessionEvent(sessionId, "ssh:error", { sessionId, message: error.message });
       })
@@ -338,6 +341,7 @@ ipcMain.handle("ssh:connect", async (_event, payload) => {
         const closing = sessions.get(sessionId);
         if (closing) closeSftp(closing);
         sessions.delete(sessionId);
+        clearDragCacheForSession(sessionId);
         sendSessionEvent(sessionId, "ssh:closed", { sessionId });
         closeTerminalWindows(sessionId);
       })
@@ -364,6 +368,7 @@ ipcMain.handle("ssh:disconnect", (_event, sessionId) => {
     session.stream?.end();
     session.client?.end();
     sessions.delete(sessionId);
+    clearDragCacheForSession(sessionId);
     closeTerminalWindows(sessionId);
   }
   return true;
@@ -555,6 +560,22 @@ function cleanupDragTempDirs() {
     try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
   }
   dragTempDirs.clear();
+  dragPrefetchCache.clear();
+}
+
+function dragCacheKey(sessionId, remotePath) {
+  return `${sessionId}::${remotePath}`;
+}
+
+function clearDragCacheForSession(sessionId) {
+  for (const [key, entry] of dragPrefetchCache) {
+    if (!key.startsWith(`${sessionId}::`)) continue;
+    if (entry.tempBase) {
+      try { fs.rmSync(entry.tempBase, { recursive: true, force: true }); } catch {}
+      dragTempDirs.delete(entry.tempBase);
+    }
+    dragPrefetchCache.delete(key);
+  }
 }
 
 ipcMain.handle("ssh:listdir", async (_event, payload) => {
@@ -648,60 +669,103 @@ ipcMain.handle("ssh:upload", async (_event, payload) => {
   };
 });
 
-ipcMain.handle("ssh:start-drag", async (event, payload) => {
-  const session = sessions.get(payload?.sessionId);
-  if (!session?.client) throw new Error("No active SSH session.");
-  const sftp = await getSftp(session);
-  const remotePath = normalizeRemotePath(payload.remotePath);
-  const attrs = await sftpStat(sftp, remotePath);
-  const displayName = String(payload.name || path.posix.basename(remotePath) || "download");
+ipcMain.handle("ssh:prefetch-drag", async (event, payload) => {
+  const sessionId = payload?.sessionId;
+  const remotePath = normalizeRemotePath(payload?.remotePath);
+  if (!sessionId || !remotePath) throw new Error("Missing session or remote path.");
 
-  const tempBase = fs.mkdtempSync(path.join(os.tmpdir(), "sshdock-drag-"));
-  dragTempDirs.add(tempBase);
-  const rootLocalPath = path.join(tempBase, displayName);
-  const downloadId = crypto.randomUUID();
-  const totalSize = attrs.isDirectory() ? await computeRemoteSize(sftp, remotePath) : Number(attrs.size || 0);
-  const ctx = {
-    sessionId: payload.sessionId,
-    downloadId,
-    displayName,
-    totalSize,
-    rootLocalPath,
-    progress: { bytes: 0 }
-  };
-
-  sendSessionEvent(payload.sessionId, "ssh:download-progress", {
-    sessionId: payload.sessionId,
-    downloadId,
-    fileName: displayName,
-    transferred: 0,
-    total: totalSize,
-    localPath: rootLocalPath
-  });
-
-  try {
-    if (attrs.isDirectory()) {
-      await downloadDirRecursive(sftp, remotePath, rootLocalPath, ctx);
-    } else {
-      await downloadFileSftp(sftp, remotePath, rootLocalPath, ctx);
+  const key = dragCacheKey(sessionId, remotePath);
+  const cached = dragPrefetchCache.get(key);
+  if (cached) {
+    cached.lastSender = event.sender;
+    if (cached.localPath && fs.existsSync(cached.localPath)) {
+      try { event.sender.startDrag({ file: cached.localPath, icon: getDragIcon() }); } catch {}
+      return { localPath: cached.localPath, size: cached.size, isDirectory: cached.isDirectory };
     }
-  } catch (error) {
-    try { fs.rmSync(tempBase, { recursive: true, force: true }); } catch {}
-    dragTempDirs.delete(tempBase);
-    throw error;
+    if (cached.promise) {
+      return cached.promise;
+    }
   }
 
-  sendSessionEvent(payload.sessionId, "ssh:download-progress", {
-    sessionId: payload.sessionId,
-    downloadId,
-    fileName: displayName,
-    transferred: totalSize,
-    total: totalSize,
-    localPath: rootLocalPath
-  });
+  const session = sessions.get(sessionId);
+  if (!session?.client) throw new Error("No active SSH session.");
 
-  event.sender.startDrag({ file: rootLocalPath, icon: getDragIcon() });
-  return { downloadId, localPath: rootLocalPath, size: totalSize, isDirectory: attrs.isDirectory() };
+  const displayName = String(payload.name || path.posix.basename(remotePath) || "download");
+  const entry = { promise: null, localPath: null, tempBase: null, size: 0, isDirectory: false, lastSender: event.sender };
+
+  entry.promise = (async () => {
+    const sftp = await getSftp(session);
+    const attrs = await sftpStat(sftp, remotePath);
+    const tempBase = fs.mkdtempSync(path.join(os.tmpdir(), "sshdock-drag-"));
+    dragTempDirs.add(tempBase);
+    entry.tempBase = tempBase;
+    const rootLocalPath = path.join(tempBase, displayName);
+    const downloadId = crypto.randomUUID();
+    const totalSize = attrs.isDirectory() ? await computeRemoteSize(sftp, remotePath) : Number(attrs.size || 0);
+    const ctx = {
+      sessionId,
+      downloadId,
+      displayName,
+      totalSize,
+      rootLocalPath,
+      progress: { bytes: 0 }
+    };
+
+    sendSessionEvent(sessionId, "ssh:download-progress", {
+      sessionId,
+      downloadId,
+      fileName: displayName,
+      transferred: 0,
+      total: totalSize,
+      localPath: rootLocalPath
+    });
+
+    try {
+      if (attrs.isDirectory()) {
+        await downloadDirRecursive(sftp, remotePath, rootLocalPath, ctx);
+      } else {
+        await downloadFileSftp(sftp, remotePath, rootLocalPath, ctx);
+      }
+    } catch (error) {
+      try { fs.rmSync(tempBase, { recursive: true, force: true }); } catch {}
+      dragTempDirs.delete(tempBase);
+      dragPrefetchCache.delete(key);
+      throw error;
+    }
+
+    sendSessionEvent(sessionId, "ssh:download-progress", {
+      sessionId,
+      downloadId,
+      fileName: displayName,
+      transferred: totalSize,
+      total: totalSize,
+      localPath: rootLocalPath
+    });
+
+    entry.localPath = rootLocalPath;
+    entry.size = totalSize;
+    entry.isDirectory = attrs.isDirectory();
+    try {
+      if (entry.lastSender && !entry.lastSender.isDestroyed()) {
+        entry.lastSender.startDrag({ file: rootLocalPath, icon: getDragIcon() });
+      }
+    } catch {}
+    return { localPath: rootLocalPath, size: totalSize, isDirectory: entry.isDirectory };
+  })();
+
+  dragPrefetchCache.set(key, entry);
+  return entry.promise;
+});
+
+ipcMain.on("ssh:start-drag", (event, payload) => {
+  const sessionId = payload?.sessionId;
+  const remotePath = normalizeRemotePath(payload?.remotePath);
+  if (!sessionId || !remotePath) return;
+  const entry = dragPrefetchCache.get(dragCacheKey(sessionId, remotePath));
+  if (!entry?.localPath || !fs.existsSync(entry.localPath)) return;
+  try {
+    event.sender.startDrag({ file: entry.localPath, icon: getDragIcon() });
+  } catch {}
 });
 
 ipcMain.handle("ssh:mkdir", async (_event, payload) => {
