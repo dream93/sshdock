@@ -41,14 +41,15 @@ terminal.open(document.getElementById("terminal"));
 document.getElementById("terminalTitle").textContent = initialTitle;
 document.title = `${initialTitle} - SSHDock`;
 
+let lastCols = 0;
+let lastRows = 0;
 function fitAndResize() {
   fitAddon.fit();
-  if (sessionId) {
-    api.resize({
-      sessionId,
-      cols: terminal.cols,
-      rows: terminal.rows
-    });
+  // 仅在行列变化时同步 PTY，避免 ResizeObserver 高频触发导致的 IPC 抖动
+  if (sessionId && (terminal.cols !== lastCols || terminal.rows !== lastRows)) {
+    lastCols = terminal.cols;
+    lastRows = terminal.rows;
+    api.resize({ sessionId, cols: terminal.cols, rows: terminal.rows });
   }
 }
 
@@ -83,6 +84,10 @@ api.onError((payload) => {
 });
 
 window.addEventListener("resize", fitAndResize);
+// 容器真实尺寸变化时自动重排：覆盖首帧字体与单元格测量未就绪、窗口尺寸由系统二次调整等情形，
+// 避免 cols/rows 与可视区不一致导致的「宽度溢出」「高度固定无法滚动」。
+new ResizeObserver(() => fitAndResize()).observe(document.getElementById("terminal"));
+document.fonts?.ready?.then(fitAndResize);
 systemThemeQuery.addEventListener("change", applyTheme);
 
 api.terminalSnapshot(sessionId).then((snapshot) => {
