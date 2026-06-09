@@ -472,10 +472,11 @@ function selectTerminalSession(sessionId) {
   }
 
   activeSessionId = session.id;
+  let group = null;
   if (session.kind === "local") {
     activeGroupId = session.groupId;
     activeSessionConnectionId = "";
-    const group = terminalGroups.get(session.groupId);
+    group = terminalGroups.get(session.groupId);
     if (group) group.lastSessionId = session.id;
   } else {
     activeSessionConnectionId = session.connectionId;
@@ -488,7 +489,8 @@ function selectTerminalSession(sessionId) {
     item.pane.classList.toggle("hidden", item.id !== sessionId);
   }
 
-  $("terminalTitle").textContent = session.title;
+  // 本地终端的顶部标题显示组名（= 第一个窗口所在目录最后一节）
+  $("terminalTitle").textContent = group?.title || session.title;
   setStatus(session.statusKey, session.statusValues);
   setTerminalFocus(true);
   renderSessionTabs();
@@ -508,9 +510,15 @@ function removeTerminalSession(sessionId) {
   session.terminal.dispose();
   session.pane.remove();
 
-  // 本地组内会话全部关闭后，移除该组栏目
-  if (session.kind === "local" && groupId && groupSiblings.length === 0) {
-    terminalGroups.delete(groupId);
+  // 本地组内会话全部关闭后，移除该组栏目；否则若关闭的是「第一个窗口」，改用现存会话作为命名基准
+  if (session.kind === "local" && groupId) {
+    const group = terminalGroups.get(groupId);
+    if (groupSiblings.length === 0) {
+      terminalGroups.delete(groupId);
+    } else if (group && group.firstSessionId === sessionId) {
+      group.firstSessionId = groupSiblings[0].id;
+      updateGroupTitleFromCwd(groupId);
+    }
   }
 
   if (activeSessionId !== sessionId) {
@@ -856,14 +864,44 @@ async function startLocalSession(session, { cwd = "" } = {}) {
 async function createTerminalGroup() {
   localTerminalCounter += 1;
   const groupId = crypto.randomUUID();
-  const title = t("localTerminalTitle", { index: localTerminalCounter });
-  terminalGroups.set(groupId, { id: groupId, title, lastSessionId: "" });
-
   const sessionId = crypto.randomUUID();
+  const title = t("localTerminalTitle", { index: localTerminalCounter });
+  terminalGroups.set(groupId, { id: groupId, title, firstSessionId: sessionId, lastSessionId: "" });
+
   const session = createTerminalSession(sessionId, { name: title }, "local", groupId);
   sidebarMode = "terminals";
   selectTerminalSession(sessionId);
   await startLocalSession(session);
+  updateGroupTitleFromCwd(groupId);
+}
+
+// 取路径最后一节作为终端名
+function lastPathSegment(p) {
+  const norm = String(p || "").replace(/[\\/]+$/, "");
+  if (!norm) return "/";
+  return norm.split(/[\\/]/).pop() || "/";
+}
+
+// 组名以「第一个窗口」当前所在目录的最后一节为准（随 cd 实时更新；Windows 取不到 cwd 时保留占位名）
+async function updateGroupTitleFromCwd(groupId) {
+  const group = terminalGroups.get(groupId);
+  if (!group) return;
+  const first = (group.firstSessionId && terminalSessions.get(group.firstSessionId))
+    || [...terminalSessions.values()].find((s) => s.kind === "local" && s.groupId === groupId);
+  if (!first) return;
+
+  let cwd = "";
+  try { cwd = (await api.localTerminalCwd(first.id)) || ""; } catch {}
+  if (!cwd) return;
+
+  const name = lastPathSegment(cwd);
+  if (!name || name === group.title) return;
+  group.title = name;
+  first.title = name;
+  if (activeSessionId === first.id || terminalSessions.get(activeSessionId)?.groupId === groupId) {
+    $("terminalTitle").textContent = name;
+  }
+  renderSidebar();
 }
 
 // 组内「+」：新建标签并继承当前终端目录（类 cmd+t）
@@ -1305,3 +1343,8 @@ api.onTerminalWindowClosed(({ sessionId }) => {
 refreshConnections().catch((error) => {
   $("status").textContent = error.message;
 });
+
+// 定时刷新各终端组名（跟随第一个窗口的当前目录）
+setInterval(() => {
+  for (const groupId of terminalGroups.keys()) updateGroupTitleFromCwd(groupId);
+}, 2000);
