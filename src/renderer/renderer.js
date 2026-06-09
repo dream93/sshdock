@@ -324,11 +324,41 @@ function terminalOptions() {
   };
 }
 
+// 让选区起点与系统终端一致：xterm 默认按「最近字符边界」吸附——鼠标按在字符右半边时，
+// 起点会跳到下一个字符，导致复制内容比所选少了第一个字符。这里把鼠标「按下」这一次的取列
+// 改为 floor（按下落在哪个字符，就从哪个字符开始选），拖动终点仍沿用 xterm 原有语义。
+// 仅修改 mousedown 那一次的 getCoords，通过比对事件对象来精确命中，不影响拖动与点击。
+function useCellSelectionAnchor(term, container) {
+  try {
+    const core = term._core;
+    const mouseSvc = core?._mouseService;
+    if (!mouseSvc || mouseSvc.__cellAnchorPatched) return;
+    const origGetCoords = mouseSvc.getCoords.bind(mouseSvc);
+    let downEvent = null;
+    container.addEventListener("mousedown", (e) => { downEvent = e; }, true);
+    mouseSvc.getCoords = function (event, el, cols, rows, isSelection) {
+      const res = origGetCoords(event, el, cols, rows, isSelection);
+      if (res && isSelection && event === downEvent) {
+        const rect = el.getBoundingClientRect();
+        const padLeft = parseInt(getComputedStyle(el).paddingLeft) || 0;
+        const cellW = core._renderService?.dimensions?.css?.cell?.width;
+        if (cellW > 0) {
+          const cell = Math.floor((event.clientX - rect.left - padLeft) / cellW);
+          res[0] = Math.min(Math.max(cell + 1, 1), cols + 1); // 1 基；SelectionService 后续会 -1
+        }
+      }
+      return res;
+    };
+    mouseSvc.__cellAnchorPatched = true;
+  } catch {}
+}
+
 function createTerminalIn(container) {
   const instance = new TerminalCtor(terminalOptions());
   const fitAddon = new FitAddonCtor();
   instance.loadAddon(fitAddon);
   instance.open(container);
+  useCellSelectionAnchor(instance, container);
   return { terminal: instance, fitAddon };
 }
 

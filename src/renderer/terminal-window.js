@@ -41,6 +41,34 @@ terminal.open(document.getElementById("terminal"));
 document.getElementById("terminalTitle").textContent = initialTitle;
 document.title = `${initialTitle} - SSHDock`;
 
+// 让选区起点与系统终端一致：xterm 默认按「最近字符边界」吸附，鼠标按在字符右半边时起点会跳到
+// 下一个字符，导致复制少了第一个字符。这里把鼠标「按下」这一次的取列改为 floor（按下落在哪个
+// 字符就从哪个字符开始选），拖动终点仍沿用 xterm 原有语义。
+(function useCellSelectionAnchor() {
+  try {
+    const core = terminal._core;
+    const mouseSvc = core?._mouseService;
+    if (!mouseSvc) return;
+    const container = document.getElementById("terminal");
+    const origGetCoords = mouseSvc.getCoords.bind(mouseSvc);
+    let downEvent = null;
+    container.addEventListener("mousedown", (e) => { downEvent = e; }, true);
+    mouseSvc.getCoords = function (event, el, cols, rows, isSelection) {
+      const res = origGetCoords(event, el, cols, rows, isSelection);
+      if (res && isSelection && event === downEvent) {
+        const rect = el.getBoundingClientRect();
+        const padLeft = parseInt(getComputedStyle(el).paddingLeft) || 0;
+        const cellW = core._renderService?.dimensions?.css?.cell?.width;
+        if (cellW > 0) {
+          const cell = Math.floor((event.clientX - rect.left - padLeft) / cellW);
+          res[0] = Math.min(Math.max(cell + 1, 1), cols + 1);
+        }
+      }
+      return res;
+    };
+  } catch {}
+})();
+
 // 强制重新测量字符单元格尺寸：窗口处于后台/被遮挡时 xterm 会把单元格量成 0 并缓存，
 // 此时 fit() 因 cell.width===0 直接返回，恢复前台后沿用陈旧尺寸导致宽高都不对，
 // 要等下一次输入触发内部 refresh 才恢复。measure() 量到新尺寸会触发重算重绘，宽高即纠正。
