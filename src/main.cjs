@@ -39,6 +39,29 @@ function configPath() {
   return path.join(app.getPath("userData"), "connections.json");
 }
 
+function terminalGroupsPath() {
+  return path.join(app.getPath("userData"), "terminal-groups.json");
+}
+
+// 读取上次退出时记录的终端标签（仅保存标题与目录，不含会话状态）
+function readTerminalGroups() {
+  try {
+    const raw = fs.readFileSync(terminalGroupsPath(), "utf8");
+    const list = JSON.parse(raw);
+    return Array.isArray(list) ? list : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeTerminalGroups(groups) {
+  const list = (Array.isArray(groups) ? groups : [])
+    .filter((g) => g && g.cwd)
+    .map((g) => ({ title: String(g.title || ""), cwd: String(g.cwd || "") }));
+  fs.mkdirSync(path.dirname(terminalGroupsPath()), { recursive: true });
+  fs.writeFileSync(terminalGroupsPath(), JSON.stringify(list, null, 2), "utf8");
+}
+
 function readConnections() {
   try {
     const raw = fs.readFileSync(configPath(), "utf8");
@@ -326,6 +349,14 @@ ipcMain.handle("localterm:cwd", async (_event, sessionId) => {
     return "";
   }
   return "";
+});
+
+// 终端标签（本地终端组）的持久化：退出时记录、下次启动恢复
+ipcMain.handle("termgroups:load", () => readTerminalGroups());
+
+ipcMain.handle("termgroups:save", (_event, groups) => {
+  writeTerminalGroups(groups);
+  return true;
 });
 
 ipcMain.handle("terminal:open-window", (_event, payload) => {

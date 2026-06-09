@@ -516,6 +516,7 @@ function removeTerminalSession(sessionId) {
     const group = terminalGroups.get(groupId);
     if (groupSiblings.length === 0) {
       terminalGroups.delete(groupId);
+      persistTerminalGroups();
     } else if (group && group.firstSessionId === sessionId) {
       group.firstSessionId = groupSiblings[0].id;
       updateGroupTitleFromCwd(groupId);
@@ -576,13 +577,15 @@ function renderTerminalGroups() {
     button.className = `connection-item ${group.id === activeGroupId ? "active" : ""}`;
     button.innerHTML = `<strong></strong><span></span>`;
     button.querySelector("strong").textContent = group.title;
-    button.querySelector("span").textContent = t("shellCount", { count });
+    // 休眠标签（尚未拉起终端）显示记录的目录路径，已激活的显示终端数量
+    button.querySelector("span").textContent = count > 0 ? t("shellCount", { count }) : (group.cwd || t("shellCount", { count }));
     button.addEventListener("click", () => {
       const g = terminalGroups.get(group.id);
       const target = (g?.lastSessionId && terminalSessions.has(g.lastSessionId))
         ? g.lastSessionId
         : [...terminalSessions.values()].find((s) => s.kind === "local" && s.groupId === group.id)?.id;
       if (target) selectTerminalSession(target);
+      else activateGroup(group.id);
     });
     item.appendChild(button);
 
@@ -884,6 +887,7 @@ function lastPathSegment(p) {
 }
 
 // 组名以「第一个窗口」当前所在目录的最后一节为准（随 cd 实时更新；Windows 取不到 cwd 时保留占位名）
+// 同时缓存完整 cwd，用于退出时记录标签、下次启动恢复到对应目录
 async function updateGroupTitleFromCwd(groupId) {
   const group = terminalGroups.get(groupId);
   if (!group) return;
@@ -895,14 +899,72 @@ async function updateGroupTitleFromCwd(groupId) {
   try { cwd = (await api.localTerminalCwd(first.id)) || ""; } catch {}
   if (!cwd) return;
 
-  const name = lastPathSegment(cwd);
-  if (!name || name === group.title) return;
-  group.title = name;
-  first.title = name;
-  if (activeSessionId === first.id || terminalSessions.get(activeSessionId)?.groupId === groupId) {
-    $("terminalTitle").textContent = name;
+  let changed = false;
+  if (cwd !== group.cwd) {
+    group.cwd = cwd;
+    changed = true;
   }
-  renderSidebar();
+
+  const name = lastPathSegment(cwd);
+  if (name && name !== group.title) {
+    group.title = name;
+    first.title = name;
+    if (activeSessionId === first.id || terminalSessions.get(activeSessionId)?.groupId === groupId) {
+      $("terminalTitle").textContent = name;
+    }
+    changed = true;
+  }
+
+  if (changed) {
+    renderSidebar();
+    persistTerminalGroups();
+  }
+}
+
+// 将当前所有终端标签（标题 + 目录）写入磁盘，供下次启动恢复
+function persistTerminalGroups() {
+  const data = [...terminalGroups.values()].map((g) => ({ title: g.title, cwd: g.cwd || "" }));
+  api.saveTerminalGroups(data).catch(() => {});
+}
+
+// 启动时恢复上次退出记录的终端标签：以「休眠」态展示，点击后才在对应目录拉起本地终端
+async function restoreTerminalGroups() {
+  let saved = [];
+  try { saved = await api.loadTerminalGroups(); } catch {}
+  if (!Array.isArray(saved)) return;
+
+  for (const item of saved) {
+    if (!item?.cwd) continue;
+    const groupId = crypto.randomUUID();
+    terminalGroups.set(groupId, {
+      id: groupId,
+      title: item.title || lastPathSegment(item.cwd),
+      cwd: item.cwd,
+      firstSessionId: "",
+      lastSessionId: "",
+      restored: true
+    });
+  }
+
+  if (terminalGroups.size > 0) {
+    sidebarMode = "terminals";
+    renderSidebar();
+  }
+}
+
+// 激活一个休眠标签：在记录的目录（若已不存在则由主进程回退家目录）拉起本地终端
+async function activateGroup(groupId) {
+  const group = terminalGroups.get(groupId);
+  if (!group) return;
+
+  const sessionId = crypto.randomUUID();
+  const session = createTerminalSession(sessionId, { name: group.title }, "local", groupId);
+  group.firstSessionId = sessionId;
+  group.restored = false;
+  sidebarMode = "terminals";
+  selectTerminalSession(sessionId);
+  await startLocalSession(session, { cwd: group.cwd });
+  updateGroupTitleFromCwd(groupId);
 }
 
 // 组内「+」：新建标签并继承当前终端目录（类 cmd+t）
@@ -933,6 +995,7 @@ async function closeTerminalGroup(groupId) {
   }
   terminalGroups.delete(groupId);
   renderSidebar();
+  persistTerminalGroups();
 }
 
 async function openTerminalWindow() {
@@ -1385,7 +1448,15 @@ refreshConnections().catch((error) => {
   $("status").textContent = error.message;
 });
 
-// 定时刷新各终端组名（跟随第一个窗口的当前目录）
+// 启动时恢复上次退出记录的终端标签
+restoreTerminalGroups().catch(() => {});
+
+// 定时刷新各终端组名（跟随第一个窗口的当前目录），并据此持久化标签
 setInterval(() => {
   for (const groupId of terminalGroups.keys()) updateGroupTitleFromCwd(groupId);
 }, 2000);
+
+// 关闭窗口前补记一次当前标签，尽量减少轮询间隔造成的目录滞后
+window.addEventListener("beforeunload", () => {
+  if (terminalGroups.size > 0) persistTerminalGroups();
+});

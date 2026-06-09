@@ -20,6 +20,8 @@ contextBridge.exposeInMainWorld("sshDock", {
   removeRemote: (payload) => ipcRenderer.invoke("ssh:rm", payload),
   createLocalTerminal: (payload) => ipcRenderer.invoke("localterm:create", payload),
   localTerminalCwd: (sessionId) => ipcRenderer.invoke("localterm:cwd", sessionId),
+  loadTerminalGroups: () => ipcRenderer.invoke("termgroups:load"),
+  saveTerminalGroups: (groups) => ipcRenderer.invoke("termgroups:save", groups),
   openTerminalWindow: (payload) => ipcRenderer.invoke("terminal:open-window", payload),
   terminalSnapshot: (sessionId) => ipcRenderer.invoke("terminal:snapshot", sessionId),
   onData: (callback) => ipcRenderer.on("ssh:data", (_event, payload) => callback(payload)),
