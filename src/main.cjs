@@ -3,6 +3,7 @@ const path = require("path");
 const fs = require("fs");
 const os = require("os");
 const crypto = require("crypto");
+const { execFile } = require("child_process");
 const { Client } = require("ssh2");
 
 let pty = null;
@@ -271,11 +272,17 @@ ipcMain.handle("localterm:create", (_event, payload) => {
   const cols = Number(payload?.cols) || 100;
   const rows = Number(payload?.rows) || 30;
 
+  // 新建终端默认在家目录；若指定了有效目录则继承（类 cmd+t）
+  let cwd = os.homedir();
+  if (payload?.cwd) {
+    try { if (fs.statSync(payload.cwd).isDirectory()) cwd = payload.cwd; } catch {}
+  }
+
   const child = ptyLib.spawn(file, args, {
     name: "xterm-256color",
     cols,
     rows,
-    cwd: os.homedir(),
+    cwd,
     env: { ...process.env, TERM: "xterm-256color" }
   });
 
@@ -295,6 +302,30 @@ ipcMain.handle("localterm:create", (_event, payload) => {
   });
 
   return { sessionId, title };
+});
+
+// 查询某本地终端 shell 进程的当前工作目录（用于新建标签继承目录）
+ipcMain.handle("localterm:cwd", async (_event, sessionId) => {
+  const session = sessions.get(String(sessionId || ""));
+  const pid = session?.pty?.pid;
+  if (!pid) return "";
+  try {
+    if (process.platform === "linux") {
+      return fs.readlinkSync(`/proc/${pid}/cwd`);
+    }
+    if (process.platform === "darwin") {
+      return await new Promise((resolve) => {
+        execFile("lsof", ["-a", "-p", String(pid), "-d", "cwd", "-Fn"], (error, stdout) => {
+          if (error) { resolve(""); return; }
+          const line = String(stdout).split("\n").find((l) => l.startsWith("n"));
+          resolve(line ? line.slice(1).trim() : "");
+        });
+      });
+    }
+  } catch {
+    return "";
+  }
+  return "";
 });
 
 ipcMain.handle("terminal:open-window", (_event, payload) => {

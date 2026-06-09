@@ -23,8 +23,10 @@
           </div>
         </div>
 
-        <button id="newConnection" class="primary" data-i18n="newConnection">New connection</button>
-        <button id="newLocalTerminal" class="secondary sidebar-local-terminal" data-i18n="localTerminal">Local terminal</button>
+        <div class="sidebar-segmented">
+          <button id="segConnections" type="button" class="seg-btn active">New connection</button>
+          <button id="segTerminals" type="button" class="seg-btn">Terminal</button>
+        </div>
         <div id="connectionList" class="connection-list"></div>
         <button id="settingsButton" class="ghost sidebar-action" data-i18n="settings">Settings</button>
       </aside>
