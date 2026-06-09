@@ -1004,7 +1004,8 @@ async function openTerminalWindow() {
 
   await api.openTerminalWindow({
     sessionId: session.id,
-    title: session.title
+    title: session.title,
+    kind: session.kind
   });
   session.detached = true;
   updateTerminalActions();
@@ -1053,9 +1054,27 @@ function fileSizeLabel(bytes) {
   return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
 }
 
-function canUploadToActiveSession() {
+// POSIX shell：反斜杠转义空格及常见元字符，匹配 macOS Terminal 拖入路径的行为
+function escapePosixPath(p) {
+  return p.replace(/([\s'"\\$`&|;<>()*?!#~\[\]{}])/g, "\\$1");
+}
+
+// Windows cmd/powershell：含空格或特殊字符时整体用双引号包裹
+function escapeWinPath(p) {
+  return /[\s&()[\]{}^=;!'+,`~]/.test(p) ? `"${p}"` : p;
+}
+
+// 把拖入的文件/文件夹路径作为文本插入到终端（像普通终端那样），并附一个尾随空格便于继续输入
+function insertDroppedPaths(files) {
   const session = terminalSessions.get(activeSessionId);
-  return Boolean(session && session.kind !== "local");
+  if (!session) return;
+  const paths = Array.from(files).map((file) => file.path).filter(Boolean);
+  if (!paths.length) return;
+  // SSH 目标几乎都是 POSIX；本地终端按宿主平台决定转义方式
+  const posix = session.kind !== "local" || api.platform !== "win32";
+  const escape = posix ? escapePosixPath : escapeWinPath;
+  const text = paths.map(escape).join(" ") + " ";
+  api.sendInput({ sessionId: session.id, data: text });
 }
 
 async function uploadDroppedFiles(files, remoteDir = "") {
@@ -1369,10 +1388,27 @@ fileListEl.addEventListener("drop", async (event) => {
   await uploadDroppedFiles(event.dataTransfer.files, sessionRemotePath.get(activeSessionId) || "");
 });
 
+// 拖入终端的行为：默认像普通终端那样把路径插入到光标处；
+// 仅当 SSH 会话且按住 Shift 时才走 SFTP 上传（本地终端无 SFTP，始终插入路径）。
+// 返回 "upload" | "insert" | "none"。
+function terminalDropMode(event) {
+  const session = terminalSessions.get(activeSessionId);
+  if (!session) return "none";
+  if (!event.dataTransfer.types.includes("Files")) return "none";
+  if (session.kind !== "local" && event.shiftKey) return "upload";
+  return "insert";
+}
+
 $("terminal").addEventListener("dragover", (event) => {
+  const mode = terminalDropMode(event);
+  if (mode === "none") {
+    event.dataTransfer.dropEffect = "none";
+    return;
+  }
   event.preventDefault();
-  event.dataTransfer.dropEffect = canUploadToActiveSession() ? "copy" : "none";
-  if (canUploadToActiveSession()) $("terminal").closest(".terminal-panel").classList.add("drag-over");
+  event.dataTransfer.dropEffect = "copy";
+  // 仅上传模式显示「拖放文件以上传」高亮，插入路径模式不打扰
+  $("terminal").closest(".terminal-panel").classList.toggle("drag-over", mode === "upload");
 });
 
 $("terminal").addEventListener("dragleave", () => {
@@ -1380,9 +1416,15 @@ $("terminal").addEventListener("dragleave", () => {
 });
 
 $("terminal").addEventListener("drop", async (event) => {
+  const mode = terminalDropMode(event);
+  if (mode === "none") return;
   event.preventDefault();
   $("terminal").closest(".terminal-panel").classList.remove("drag-over");
-  await uploadDroppedFiles(event.dataTransfer.files, sessionRemotePath.get(activeSessionId) || "");
+  if (mode === "upload") {
+    await uploadDroppedFiles(event.dataTransfer.files, sessionRemotePath.get(activeSessionId) || "");
+  } else {
+    insertDroppedPaths(event.dataTransfer.files);
+  }
 });
 
 // 写入终端数据并保持「跟随底部」：

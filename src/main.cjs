@@ -194,7 +194,7 @@ function closeTerminalWindows(sessionId) {
   terminalWindows.delete(sessionId);
 }
 
-function createTerminalWindow(sessionId, title) {
+function createTerminalWindow(sessionId, title, kind = "ssh") {
   const existing = Array.from(terminalWindows.get(sessionId) || []).find((window) => !window.isDestroyed());
   if (existing) {
     existing.focus();
@@ -230,7 +230,8 @@ function createTerminalWindow(sessionId, title) {
   terminalWindow.loadFile(path.join(__dirname, "renderer", "terminal-window.html"), {
     query: {
       sessionId,
-      title: title || "Terminal"
+      title: title || "Terminal",
+      kind: kind || "ssh"
     }
   });
 
@@ -362,7 +363,7 @@ ipcMain.handle("termgroups:save", (_event, groups) => {
 ipcMain.handle("terminal:open-window", (_event, payload) => {
   const sessionId = String(payload?.sessionId || "");
   if (!sessionId || !sessions.has(sessionId)) throw new Error("No active SSH session.");
-  createTerminalWindow(sessionId, String(payload?.title || "Terminal"));
+  createTerminalWindow(sessionId, String(payload?.title || "Terminal"), String(payload?.kind || "ssh"));
   return true;
 });
 
