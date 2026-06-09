@@ -760,7 +760,7 @@ $("connectionForm").addEventListener("submit", async (event) => {
   }
 });
 
-$("connect").addEventListener("click", connect);
+$("connect").addEventListener("click", () => connect());
 $("disconnect").addEventListener("click", disconnect);
 $("toolbarDisconnect").addEventListener("click", disconnect);
 $("popOutTerminal").addEventListener("click", openTerminalWindow);
