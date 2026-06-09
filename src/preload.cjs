@@ -1,6 +1,7 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("sshDock", {
+  platform: process.platform,
   listConnections: () => ipcRenderer.invoke("connections:list"),
   saveConnection: (connection) => ipcRenderer.invoke("connections:save", connection),
   deleteConnection: (id) => ipcRenderer.invoke("connections:delete", id),

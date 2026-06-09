@@ -5,6 +5,7 @@ const systemThemeQuery = window.matchMedia("(prefers-color-scheme: light)");
 const params = new URLSearchParams(window.location.search);
 const sessionId = params.get("sessionId") || "";
 const initialTitle = params.get("title") || "Terminal";
+const sessionKind = params.get("kind") || "ssh";
 
 function resolvedTheme() {
   const mode = localStorage.getItem("sshdock.theme") || "system";
@@ -94,6 +95,30 @@ function fitAndResize() {
 
 terminal.onData((data) => {
   if (sessionId) api.sendInput({ sessionId, data });
+});
+
+// 拖入文件/文件夹时把路径作为文本插入（像普通终端那样）；独立窗口无 SFTP，始终插入路径
+function escapePosixPath(p) {
+  return p.replace(/([\s'"\\$`&|;<>()*?!#~\[\]{}])/g, "\\$1");
+}
+function escapeWinPath(p) {
+  return /[\s&()[\]{}^=;!'+,`~]/.test(p) ? `"${p}"` : p;
+}
+const terminalEl = document.getElementById("terminal");
+terminalEl.addEventListener("dragover", (event) => {
+  if (!sessionId || !event.dataTransfer.types.includes("Files")) return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect = "copy";
+});
+terminalEl.addEventListener("drop", (event) => {
+  if (!sessionId || !event.dataTransfer.types.includes("Files")) return;
+  event.preventDefault();
+  const paths = Array.from(event.dataTransfer.files).map((file) => file.path).filter(Boolean);
+  if (!paths.length) return;
+  // SSH 目标几乎都是 POSIX；本地终端按宿主平台决定转义方式
+  const posix = sessionKind !== "local" || api.platform !== "win32";
+  const escape = posix ? escapePosixPath : escapeWinPath;
+  api.sendInput({ sessionId, data: paths.map(escape).join(" ") + " " });
 });
 
 // 写入并保持「跟随底部」：大批量输出时避免视口停在顶部而无法滚到底；
