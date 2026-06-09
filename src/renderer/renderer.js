@@ -958,11 +958,13 @@ function fitAndResize() {
   const session = terminalSessions.get(activeSessionId);
   if (session) {
     session.fitAddon.fit();
-    api.resize({
-      sessionId: activeSessionId,
-      cols: session.terminal.cols,
-      rows: session.terminal.rows
-    });
+    const { cols, rows } = session.terminal;
+    // 仅在行列变化时同步 PTY，避免 ResizeObserver 高频触发导致的 IPC 抖动
+    if (session.lastCols !== cols || session.lastRows !== rows) {
+      session.lastCols = cols;
+      session.lastRows = rows;
+      api.resize({ sessionId: activeSessionId, cols, rows });
+    }
     return;
   }
   idleFitAddon.fit();
@@ -1056,6 +1058,14 @@ for (const radio of document.querySelectorAll('input[name="authType"]')) {
 }
 
 window.addEventListener("resize", fitAndResize);
+// 容器真实尺寸变化时自动重排：覆盖窗口缩放之外的所有情形——
+// 侧栏/标签显隐改变可视宽高、首帧字体与单元格测量尚未就绪等。
+// 仅靠一次 rAF 的 fit 会在测量未就绪时算出错误 cols/rows 且无后续事件纠正，
+// 表现为「宽度溢出」与「高度固定无法滚动」。
+const terminalResizeObserver = new ResizeObserver(() => fitAndResize());
+terminalResizeObserver.observe($("terminal"));
+// 字体加载完成后单元格尺寸会变化，补一次重排纠正首帧偏差
+document.fonts?.ready?.then(fitAndResize);
 document.addEventListener("click", hideConnectionMenu);
 systemThemeQuery.addEventListener("change", () => {
   if (themeMode === "system") applyTheme("system");
