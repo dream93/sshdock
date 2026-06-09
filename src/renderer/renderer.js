@@ -954,19 +954,32 @@ function setTerminalFocus(isFocused) {
   requestAnimationFrame(fitAndResize);
 }
 
+// 强制重新测量字符单元格尺寸。
+// 非活动会话的面板用 display:none 隐藏，xterm 在隐藏态会把单元格量成 0 并缓存
+// （hasValidSize=false）。切回可见后若不主动重测，fit() 会因 cell.width===0 直接返回，
+// 沿用陈旧/0 尺寸 → 宽高都不对；要等下一次输入触发内部 refresh 才恢复（即「打字就正常」）。
+// measure() 一旦量到新尺寸便会触发 onCharSizeChange → 渲染层重算并重绘，宽高随即纠正。
+function remeasure(term) {
+  try {
+    term._core?._charSizeService?.measure?.();
+  } catch {}
+}
+
 function fitAndResize() {
   const session = terminalSessions.get(activeSessionId);
   if (session) {
+    remeasure(session.terminal);
     session.fitAddon.fit();
     const { cols, rows } = session.terminal;
     // 仅在行列变化时同步 PTY，避免 ResizeObserver 高频触发导致的 IPC 抖动
-    if (session.lastCols !== cols || session.lastRows !== rows) {
+    if (Number.isFinite(cols) && Number.isFinite(rows) && (session.lastCols !== cols || session.lastRows !== rows)) {
       session.lastCols = cols;
       session.lastRows = rows;
       api.resize({ sessionId: activeSessionId, cols, rows });
     }
     return;
   }
+  remeasure(idleTerminal);
   idleFitAddon.fit();
 }
 
@@ -1066,6 +1079,11 @@ const terminalResizeObserver = new ResizeObserver(() => fitAndResize());
 terminalResizeObserver.observe($("terminal"));
 // 字体加载完成后单元格尺寸会变化，补一次重排纠正首帧偏差
 document.fonts?.ready?.then(fitAndResize);
+// 窗口从后台/遮挡恢复到前台时，xterm 在不可见期间量得的单元格尺寸为 0，需重测重排。
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") requestAnimationFrame(fitAndResize);
+});
+window.addEventListener("focus", () => requestAnimationFrame(fitAndResize));
 document.addEventListener("click", hideConnectionMenu);
 systemThemeQuery.addEventListener("change", () => {
   if (themeMode === "system") applyTheme("system");
