@@ -29,6 +29,7 @@ function applyTheme() {
 const terminal = new TerminalCtor({
   cursorBlink: true,
   convertEol: true,
+  scrollback: 10000,
   fontFamily: 'Menlo, Consolas, "Liberation Mono", monospace',
   fontSize: 13,
   theme: terminalTheme()
@@ -55,8 +56,18 @@ terminal.onData((data) => {
   if (sessionId) api.sendInput({ sessionId, data });
 });
 
+// 写入并保持「跟随底部」：大批量输出时避免视口停在顶部而无法滚到底；
+// 若用户已向上滚动阅读历史，则保留其阅读位置。
+function writeFollowingBottom(data) {
+  const buffer = terminal.buffer.active;
+  const atBottom = buffer.viewportY >= buffer.baseY;
+  terminal.write(data, () => {
+    if (atBottom) terminal.scrollToBottom();
+  });
+}
+
 api.onData((payload) => {
-  if (payload.sessionId === sessionId) terminal.write(payload.data);
+  if (payload.sessionId === sessionId) writeFollowingBottom(payload.data);
 });
 
 api.onClosed((payload) => {
