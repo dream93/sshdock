@@ -317,6 +317,7 @@ function terminalOptions() {
   return {
     cursorBlink: true,
     convertEol: true,
+    scrollback: 10000,
     fontFamily: 'Menlo, Consolas, "Liberation Mono", monospace',
     fontSize: 13,
     theme: terminalTheme()
@@ -1293,9 +1294,21 @@ $("terminal").addEventListener("drop", async (event) => {
   await uploadDroppedFiles(event.dataTransfer.files, sessionRemotePath.get(activeSessionId) || "");
 });
 
+// 写入终端数据并保持「跟随底部」：
+// PTY 大批量输出时，xterm 的吸底与 DOM 滚动区同步存在竞态，偶发停在顶部且无法滚到底；
+// 写入前记录是否在底部，待本次数据渲染完成后再补一次 scrollToBottom 纠正。
+// 若用户已向上滚动阅读历史，则保留其阅读位置，不强制拽到底部。
+function writeFollowingBottom(term, data) {
+  const buffer = term.buffer.active;
+  const atBottom = buffer.viewportY >= buffer.baseY;
+  term.write(data, () => {
+    if (atBottom) term.scrollToBottom();
+  });
+}
+
 api.onData(({ sessionId, data }) => {
   const session = terminalSessions.get(sessionId);
-  if (session) session.terminal.write(data);
+  if (session) writeFollowingBottom(session.terminal, data);
 });
 
 api.onUploadProgress(({ sessionId, uploadId, fileName, transferred, total }) => {
