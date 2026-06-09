@@ -59,6 +59,9 @@ const messages = {
     connect: "Connect",
     disconnect: "Disconnect",
     terminal: "Terminal",
+    localTerminal: "Local terminal",
+    localTerminalTitle: "Local terminal {index}",
+    localTerminalFailed: "Failed to open local terminal: {message}",
     idle: "Idle",
     ready: "SSHDock ready.",
     noSavedHosts: "No saved hosts",
@@ -146,6 +149,9 @@ const messages = {
     connect: "连接",
     disconnect: "断开",
     terminal: "终端",
+    localTerminal: "本地终端",
+    localTerminalTitle: "本地终端 {index}",
+    localTerminalFailed: "打开本地终端失败：{message}",
     idle: "空闲",
     ready: "SSHDock 已就绪。",
     noSavedHosts: "暂无已保存主机",
@@ -357,10 +363,11 @@ function formConnection() {
   };
 }
 
-function createTerminalSession(sessionId, connection) {
+function createTerminalSession(sessionId, connection, kind = "ssh") {
   const pane = createTerminalPane();
   const session = {
     id: sessionId,
+    kind,
     connectionId: connection.id || "",
     connected: false,
     title: connection.name || connection.host,
@@ -397,11 +404,13 @@ function renderSessionTabs() {
 
 function updateTerminalActions() {
   const session = terminalSessions.get(activeSessionId);
+  const isLocal = session?.kind === "local";
   $("toolbarDisconnect").classList.toggle("hidden", !session);
   $("popOutTerminal").classList.toggle("hidden", !session);
-  $("toggleFilePanel").classList.toggle("hidden", !session);
+  // 本地终端没有 SFTP，隐藏文件面板
+  $("toggleFilePanel").classList.toggle("hidden", !session || isLocal);
   if (session) $("popOutTerminal").textContent = t(session.detached ? "showPopOut" : "popOut");
-  if (!session) closeFilePanel();
+  if (!session || isLocal) closeFilePanel();
   else if (filePanelOpen) openFilePanel();
 }
 
@@ -681,6 +690,36 @@ async function disconnect() {
   removeTerminalSession(sessionId);
 }
 
+let localTerminalCounter = 0;
+async function openLocalTerminal() {
+  const sessionId = crypto.randomUUID();
+  localTerminalCounter += 1;
+  const title = t("localTerminalTitle", { index: localTerminalCounter });
+  const session = createTerminalSession(sessionId, { name: title }, "local");
+  selectTerminalSession(sessionId);
+
+  try {
+    await api.createLocalTerminal({
+      sessionId,
+      title,
+      cols: session.terminal.cols,
+      rows: session.terminal.rows
+    });
+    session.connected = true;
+    session.statusKey = "connected";
+    session.statusValues = {};
+    if (activeSessionId === sessionId) setStatus("connected");
+    renderSessionTabs();
+    fitAndResize();
+  } catch (error) {
+    const message = error.message || String(error);
+    session.statusKey = "error";
+    session.statusValues = {};
+    session.terminal.writeln(`\r\n${t("localTerminalFailed", { message })}`);
+    if (activeSessionId === sessionId) setStatus("error");
+  }
+}
+
 async function openTerminalWindow() {
   const session = terminalSessions.get(activeSessionId);
   if (!session) return;
@@ -721,7 +760,14 @@ function fileSizeLabel(bytes) {
   return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
 }
 
+function canUploadToActiveSession() {
+  const session = terminalSessions.get(activeSessionId);
+  return Boolean(session && session.kind !== "local");
+}
+
 async function uploadDroppedFiles(files, remoteDir = "") {
+  const session = terminalSessions.get(activeSessionId);
+  if (session && session.kind === "local") return; // 本地终端不支持 SFTP 上传
   if (!activeSessionId) {
     setStatus("connectBeforeUploading");
     terminal.writeln(`\r\n${t("connectBeforeDropping")}`);
@@ -765,6 +811,7 @@ $("disconnect").addEventListener("click", disconnect);
 $("toolbarDisconnect").addEventListener("click", disconnect);
 $("popOutTerminal").addEventListener("click", openTerminalWindow);
 $("newConnection").addEventListener("click", clearForm);
+$("newLocalTerminal").addEventListener("click", openLocalTerminal);
 $("settingsButton").addEventListener("click", showSettings);
 $("themeMode").addEventListener("change", (event) => applyTheme(event.target.value));
 $("languageMode").addEventListener("change", (event) => applyLanguage(event.target.value));
@@ -1012,8 +1059,8 @@ fileListEl.addEventListener("drop", async (event) => {
 
 $("terminal").addEventListener("dragover", (event) => {
   event.preventDefault();
-  event.dataTransfer.dropEffect = activeSessionId ? "copy" : "none";
-  $("terminal").closest(".terminal-panel").classList.add("drag-over");
+  event.dataTransfer.dropEffect = canUploadToActiveSession() ? "copy" : "none";
+  if (canUploadToActiveSession()) $("terminal").closest(".terminal-panel").classList.add("drag-over");
 });
 
 $("terminal").addEventListener("dragleave", () => {

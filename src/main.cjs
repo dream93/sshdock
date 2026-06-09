@@ -1,8 +1,25 @@
 const { app, BrowserWindow, dialog, ipcMain, Menu, safeStorage, shell } = require("electron");
 const path = require("path");
 const fs = require("fs");
+const os = require("os");
 const crypto = require("crypto");
 const { Client } = require("ssh2");
+
+let pty = null;
+function getPty() {
+  if (!pty) pty = require("node-pty");
+  return pty;
+}
+
+// 选择本机默认 shell 及参数
+function defaultShell() {
+  if (process.platform === "win32") {
+    return { file: process.env.ComSpec || "powershell.exe", args: [] };
+  }
+  const file = process.env.SHELL || "/bin/bash";
+  // 交互式登录 shell，确保加载用户配置（.zshrc/.bash_profile 等）
+  return { file, args: ["-l"] };
+}
 
 let mainWindow;
 const sessions = new Map();
@@ -201,6 +218,9 @@ app.whenReady().then(createWindow);
 app.on("window-all-closed", () => {
   for (const session of sessions.values()) {
     closeSftp(session);
+    if (session.pty) {
+      try { session.pty.kill(); } catch {}
+    }
     session.stream?.end();
     session.client?.end();
   }
@@ -240,6 +260,41 @@ ipcMain.handle("dialog:keyPath", async () => {
     properties: ["openFile", "showHiddenFiles"]
   });
   return result.canceled ? "" : result.filePaths[0];
+});
+
+ipcMain.handle("localterm:create", (_event, payload) => {
+  const sessionId = String(payload?.sessionId || "") || crypto.randomUUID();
+  if (sessions.has(sessionId)) return { sessionId };
+
+  const ptyLib = getPty();
+  const { file, args } = defaultShell();
+  const cols = Number(payload?.cols) || 100;
+  const rows = Number(payload?.rows) || 30;
+
+  const child = ptyLib.spawn(file, args, {
+    name: "xterm-256color",
+    cols,
+    rows,
+    cwd: os.homedir(),
+    env: { ...process.env, TERM: "xterm-256color" }
+  });
+
+  const title = String(payload?.title || "").trim() || "Local Terminal";
+  sessions.set(sessionId, { pty: child, history: "", title, isLocal: true });
+
+  child.onData((data) => {
+    const text = typeof data === "string" ? data : data.toString("utf8");
+    appendSessionHistory(sessionId, text);
+    sendSessionEvent(sessionId, "ssh:data", { sessionId, data: text });
+  });
+
+  child.onExit(() => {
+    sessions.delete(sessionId);
+    sendSessionEvent(sessionId, "ssh:closed", { sessionId });
+    closeTerminalWindows(sessionId);
+  });
+
+  return { sessionId, title };
 });
 
 ipcMain.handle("terminal:open-window", (_event, payload) => {
@@ -339,12 +394,15 @@ ipcMain.handle("ssh:connect", async (_event, payload) => {
 
 ipcMain.on("ssh:input", (_event, payload) => {
   const session = sessions.get(payload.sessionId);
-  if (session?.stream) session.stream.write(payload.data);
+  if (session?.pty) session.pty.write(payload.data);
+  else if (session?.stream) session.stream.write(payload.data);
 });
 
 ipcMain.on("ssh:resize", (_event, payload) => {
   const session = sessions.get(payload.sessionId);
-  if (session?.stream) {
+  if (session?.pty) {
+    try { session.pty.resize(Math.max(1, payload.cols), Math.max(1, payload.rows)); } catch {}
+  } else if (session?.stream) {
     session.stream.setWindow(payload.rows, payload.cols, payload.height || 0, payload.width || 0);
   }
 });
@@ -353,6 +411,9 @@ ipcMain.handle("ssh:disconnect", (_event, sessionId) => {
   const session = sessions.get(sessionId);
   if (session) {
     closeSftp(session);
+    if (session.pty) {
+      try { session.pty.kill(); } catch {}
+    }
     session.stream?.end();
     session.client?.end();
     sessions.delete(sessionId);
