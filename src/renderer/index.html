@@ -125,19 +125,34 @@
           </div>
         </section>
 
-        <section class="terminal-panel">
-          <div class="terminal-toolbar">
-            <div>
-              <strong id="terminalTitle">Terminal</strong>
-              <span id="status" class="status" data-status-key="idle">Idle</span>
+        <section class="terminal-area">
+          <section class="terminal-panel">
+            <div class="terminal-toolbar">
+              <div>
+                <strong id="terminalTitle">Terminal</strong>
+                <span id="status" class="status" data-status-key="idle">Idle</span>
+              </div>
+              <div class="terminal-actions">
+                <button id="toggleFilePanel" type="button" class="ghost hidden" data-i18n="files">Files</button>
+                <button id="popOutTerminal" type="button" class="ghost hidden" data-i18n="popOut">Pop out</button>
+                <button id="toolbarDisconnect" type="button" class="ghost hidden" data-i18n="disconnect">Disconnect</button>
+              </div>
             </div>
-            <div class="terminal-actions">
-              <button id="popOutTerminal" type="button" class="ghost hidden" data-i18n="popOut">Pop out</button>
-              <button id="toolbarDisconnect" type="button" class="ghost hidden" data-i18n="disconnect">Disconnect</button>
+            <div id="sessionTabs" class="session-tabs hidden"></div>
+            <div id="terminal"></div>
+          </section>
+
+          <aside id="filePanel" class="file-panel hidden" aria-label="Remote files">
+            <div class="file-panel-toolbar">
+              <button id="filePanelUp" type="button" class="ghost icon-btn" title="Up" data-i18n-title="parentDir">↑</button>
+              <button id="filePanelHome" type="button" class="ghost icon-btn" title="Home" data-i18n-title="home">~</button>
+              <button id="filePanelRefresh" type="button" class="ghost icon-btn" title="Refresh" data-i18n-title="refresh">⟳</button>
+              <input id="filePanelPath" type="text" spellcheck="false" />
+              <button id="filePanelMkdir" type="button" class="ghost icon-btn" title="New folder" data-i18n-title="newFolder">＋</button>
             </div>
-          </div>
-          <div id="sessionTabs" class="session-tabs hidden"></div>
-          <div id="terminal"></div>
+            <div id="filePanelList" class="file-list"></div>
+            <div id="filePanelStatus" class="file-panel-status" data-status-key="idle">Idle</div>
+          </aside>
         </section>
       </section>
     </main>

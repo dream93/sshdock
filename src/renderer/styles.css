@@ -199,6 +199,17 @@ h1 {
   background: var(--app-bg);
 }
 
+.terminal-area {
+  display: grid;
+  grid-template-columns: 1fr;
+  min-width: 0;
+  min-height: 0;
+}
+
+.terminal-area.with-files {
+  grid-template-columns: 1fr minmax(280px, 360px);
+}
+
 .workspace.terminal-focused {
   grid-template-rows: 1fr;
 }
@@ -491,6 +502,126 @@ button {
 
 .terminal-panel.drag-over::after {
   opacity: 1;
+}
+
+.file-panel {
+  display: grid;
+  position: relative;
+  grid-template-rows: 44px 1fr 24px;
+  min-width: 0;
+  min-height: 0;
+  border-left: 1px solid var(--border);
+  background: var(--panel-bg);
+}
+
+.file-panel.hidden {
+  display: none;
+}
+
+.file-panel-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--sidebar-bg);
+}
+
+.file-panel-toolbar input {
+  flex: 1;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--control-bg);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.icon-btn {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  flex: none;
+  border: 1px solid var(--border-strong);
+  background: var(--control-bg);
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1;
+  border-radius: 6px;
+}
+
+.icon-btn:hover {
+  border-color: var(--accent);
+  background: var(--control-hover);
+}
+
+.file-list {
+  overflow: auto;
+  min-height: 0;
+  padding: 4px 0;
+}
+
+.file-list.drop-target {
+  outline: 2px dashed var(--accent);
+  outline-offset: -4px;
+}
+
+.file-row {
+  display: grid;
+  grid-template-columns: 22px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: default;
+  user-select: none;
+}
+
+.file-row:hover {
+  background: var(--control-hover);
+}
+
+.file-row .file-icon {
+  font-size: 14px;
+  opacity: 0.85;
+}
+
+.file-row .file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-row .file-meta {
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.file-row.dir {
+  font-weight: 600;
+}
+
+.file-panel-status {
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  border-top: 1px solid var(--border);
+  background: var(--sidebar-bg);
+  color: var(--muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-panel-empty {
+  padding: 14px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
 }
 
 .terminal-window-body {
