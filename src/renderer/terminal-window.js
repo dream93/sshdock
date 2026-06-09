@@ -41,12 +41,23 @@ terminal.open(document.getElementById("terminal"));
 document.getElementById("terminalTitle").textContent = initialTitle;
 document.title = `${initialTitle} - SSHDock`;
 
+// 强制重新测量字符单元格尺寸：窗口处于后台/被遮挡时 xterm 会把单元格量成 0 并缓存，
+// 此时 fit() 因 cell.width===0 直接返回，恢复前台后沿用陈旧尺寸导致宽高都不对，
+// 要等下一次输入触发内部 refresh 才恢复。measure() 量到新尺寸会触发重算重绘，宽高即纠正。
+function remeasure() {
+  try {
+    terminal._core?._charSizeService?.measure?.();
+  } catch {}
+}
+
 let lastCols = 0;
 let lastRows = 0;
 function fitAndResize() {
+  remeasure();
   fitAddon.fit();
   // 仅在行列变化时同步 PTY，避免 ResizeObserver 高频触发导致的 IPC 抖动
-  if (sessionId && (terminal.cols !== lastCols || terminal.rows !== lastRows)) {
+  if (sessionId && Number.isFinite(terminal.cols) && Number.isFinite(terminal.rows) &&
+      (terminal.cols !== lastCols || terminal.rows !== lastRows)) {
     lastCols = terminal.cols;
     lastRows = terminal.rows;
     api.resize({ sessionId, cols: terminal.cols, rows: terminal.rows });
@@ -88,6 +99,11 @@ window.addEventListener("resize", fitAndResize);
 // 避免 cols/rows 与可视区不一致导致的「宽度溢出」「高度固定无法滚动」。
 new ResizeObserver(() => fitAndResize()).observe(document.getElementById("terminal"));
 document.fonts?.ready?.then(fitAndResize);
+// 窗口从后台/遮挡恢复前台时重测重排
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") requestAnimationFrame(fitAndResize);
+});
+window.addEventListener("focus", () => requestAnimationFrame(fitAndResize));
 systemThemeQuery.addEventListener("change", applyTheme);
 
 api.terminalSnapshot(sessionId).then((snapshot) => {
