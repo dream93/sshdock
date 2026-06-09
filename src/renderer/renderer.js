@@ -17,6 +17,9 @@ let activeConnectionId = "";
 let activeSessionId = "";
 let activeSessionConnectionId = "";
 let activeConnectionMenuId = "";
+let sidebarMode = "connections"; // 'connections' | 'terminals'
+let activeGroupId = "";
+const terminalGroups = new Map(); // groupId -> { id, title, lastSessionId }
 const terminalSessions = new Map();
 const uploadProgress = new Map();
 const downloadProgress = new Map();
@@ -59,6 +62,17 @@ const messages = {
     connect: "Connect",
     disconnect: "Disconnect",
     terminal: "Terminal",
+    localTerminal: "Local terminal",
+    localTerminalTitle: "Local terminal {index}",
+    localTerminalFailed: "Failed to open local terminal: {message}",
+    connectionsTab: "Connections",
+    terminalsTab: "Terminals",
+    newTerminal: "New terminal",
+    noTerminals: "No terminals",
+    createTerminalToStart: "Create one to start.",
+    shellCount: "{count} shells",
+    newTabSameDir: "New tab (same directory)",
+    closeGroup: "Close",
     idle: "Idle",
     ready: "SSHDock ready.",
     noSavedHosts: "No saved hosts",
@@ -146,6 +160,17 @@ const messages = {
     connect: "连接",
     disconnect: "断开",
     terminal: "终端",
+    localTerminal: "本地终端",
+    localTerminalTitle: "本地终端 {index}",
+    localTerminalFailed: "打开本地终端失败：{message}",
+    connectionsTab: "链接",
+    terminalsTab: "终端",
+    newTerminal: "新建终端",
+    noTerminals: "暂无终端",
+    createTerminalToStart: "新建一个终端开始使用。",
+    shellCount: "{count} 个终端",
+    newTabSameDir: "新建标签（同目录）",
+    closeGroup: "关闭",
     idle: "空闲",
     ready: "SSHDock 已就绪。",
     noSavedHosts: "暂无已保存主机",
@@ -249,7 +274,7 @@ function applyLanguage(mode) {
 
   if (!activeConnectionId) $("formTitle").textContent = t("connection");
   if (!activeSessionId) $("terminalTitle").textContent = t("terminal");
-  renderList();
+  renderSidebar();
   updateTerminalActions();
   document.documentElement.style.setProperty("--drop-label", `"${t("dropFilesToUpload")}"`);
 
@@ -316,6 +341,7 @@ function createTerminalPane(className = "terminal-instance") {
 function showIdleTerminal() {
   activeSessionId = "";
   activeSessionConnectionId = "";
+  activeGroupId = "";
   terminal = idleTerminal;
   $("terminalTitle").textContent = t("terminal");
   setStatus("idle");
@@ -326,7 +352,7 @@ function showIdleTerminal() {
   renderSessionTabs();
   $("workspace").classList.remove("terminal-focused");
   updateTerminalActions();
-  renderList();
+  renderSidebar();
   requestAnimationFrame(fitAndResize);
 }
 
@@ -357,10 +383,12 @@ function formConnection() {
   };
 }
 
-function createTerminalSession(sessionId, connection) {
+function createTerminalSession(sessionId, connection, kind = "ssh", groupId = "") {
   const pane = createTerminalPane();
   const session = {
     id: sessionId,
+    kind,
+    groupId,
     connectionId: connection.id || "",
     connected: false,
     title: connection.name || connection.host,
@@ -380,28 +408,59 @@ function createTerminalSession(sessionId, connection) {
   return session;
 }
 
+// 当前活动会话所属的栏目（本地组或 SSH 连接）内的兄弟会话
+function siblingSessions(session) {
+  if (!session) return [];
+  if (session.kind === "local") {
+    return [...terminalSessions.values()].filter((s) => s.kind === "local" && s.groupId === session.groupId);
+  }
+  return [...terminalSessions.values()].filter((s) => s.kind !== "local" && s.connectionId === session.connectionId);
+}
+
 function renderSessionTabs() {
   const tabs = $("sessionTabs");
   tabs.innerHTML = "";
-  tabs.classList.toggle("hidden", terminalSessions.size === 0);
 
-  for (const session of terminalSessions.values()) {
+  const active = terminalSessions.get(activeSessionId);
+  const isLocalGroup = active?.kind === "local";
+  const siblings = siblingSessions(active);
+
+  // 仅在栏目内有多个会话时显示横排标签；本地组始终显示以暴露「+」新建按钮
+  if (!active || (siblings.length <= 1 && !isLocalGroup)) {
+    tabs.classList.add("hidden");
+    return;
+  }
+  tabs.classList.remove("hidden");
+
+  siblings.forEach((session, index) => {
     const tab = document.createElement("button");
     tab.type = "button";
     tab.className = `session-tab ${session.id === activeSessionId ? "active" : ""}`;
-    tab.textContent = session.title;
+    tab.textContent = isLocalGroup ? String(index + 1) : session.title;
     tab.addEventListener("click", () => selectTerminalSession(session.id));
     tabs.appendChild(tab);
+  });
+
+  if (isLocalGroup) {
+    const add = document.createElement("button");
+    add.type = "button";
+    add.className = "session-tab session-tab-add";
+    add.textContent = "+";
+    add.title = t("newTabSameDir");
+    add.addEventListener("click", () => newSessionInGroup(active.groupId));
+    tabs.appendChild(add);
   }
 }
 
 function updateTerminalActions() {
   const session = terminalSessions.get(activeSessionId);
+  const isLocal = session?.kind === "local";
   $("toolbarDisconnect").classList.toggle("hidden", !session);
   $("popOutTerminal").classList.toggle("hidden", !session);
-  $("toggleFilePanel").classList.toggle("hidden", !session);
+  // 本地终端没有 SFTP，隐藏文件面板
+  $("toggleFilePanel").classList.toggle("hidden", !session || isLocal);
   if (session) $("popOutTerminal").textContent = t(session.detached ? "showPopOut" : "popOut");
-  if (!session) closeFilePanel();
+  if (!session || isLocal) closeFilePanel();
   else if (filePanelOpen) openFilePanel();
 }
 
@@ -413,7 +472,16 @@ function selectTerminalSession(sessionId) {
   }
 
   activeSessionId = session.id;
-  activeSessionConnectionId = session.connectionId;
+  let group = null;
+  if (session.kind === "local") {
+    activeGroupId = session.groupId;
+    activeSessionConnectionId = "";
+    group = terminalGroups.get(session.groupId);
+    if (group) group.lastSessionId = session.id;
+  } else {
+    activeSessionConnectionId = session.connectionId;
+    activeGroupId = "";
+  }
   terminal = session.terminal;
   idlePaneElement?.classList.add("hidden");
 
@@ -421,17 +489,20 @@ function selectTerminalSession(sessionId) {
     item.pane.classList.toggle("hidden", item.id !== sessionId);
   }
 
-  $("terminalTitle").textContent = session.title;
+  // 本地终端的顶部标题显示组名（= 第一个窗口所在目录最后一节）
+  $("terminalTitle").textContent = group?.title || session.title;
   setStatus(session.statusKey, session.statusValues);
   setTerminalFocus(true);
   renderSessionTabs();
-  renderList();
+  renderSidebar();
   requestAnimationFrame(fitAndResize);
 }
 
 function removeTerminalSession(sessionId) {
   const session = terminalSessions.get(sessionId);
   if (!session) return;
+  const groupId = session.groupId;
+  const groupSiblings = siblingSessions(session).filter((s) => s.id !== sessionId);
   terminalSessions.delete(sessionId);
   sessionRemotePath.delete(sessionId);
   uploadProgress.clear();
@@ -439,14 +510,94 @@ function removeTerminalSession(sessionId) {
   session.terminal.dispose();
   session.pane.remove();
 
+  // 本地组内会话全部关闭后，移除该组栏目；否则若关闭的是「第一个窗口」，改用现存会话作为命名基准
+  if (session.kind === "local" && groupId) {
+    const group = terminalGroups.get(groupId);
+    if (groupSiblings.length === 0) {
+      terminalGroups.delete(groupId);
+    } else if (group && group.firstSessionId === sessionId) {
+      group.firstSessionId = groupSiblings[0].id;
+      updateGroupTitleFromCwd(groupId);
+    }
+  }
+
   if (activeSessionId !== sessionId) {
     renderSessionTabs();
+    renderSidebar();
     return;
   }
 
-  const nextSession = terminalSessions.values().next().value;
+  // 优先切到同栏目的下一个会话，其次任意会话，否则回到空闲
+  const nextSession = groupSiblings[0] || terminalSessions.values().next().value;
   if (nextSession) selectTerminalSession(nextSession.id);
   else showIdleTerminal();
+}
+
+// 顶部分段控件：当前模式显示为「新建X」，另一模式显示为切换入口
+function updateSidebarSegmented() {
+  const connActive = sidebarMode === "connections";
+  $("segConnections").textContent = connActive ? t("newConnection") : t("connectionsTab");
+  $("segTerminals").textContent = connActive ? t("terminalsTab") : t("newTerminal");
+  $("segConnections").classList.toggle("active", connActive);
+  $("segTerminals").classList.toggle("active", !connActive);
+}
+
+function setSidebarMode(mode) {
+  if (sidebarMode === mode) return;
+  sidebarMode = mode;
+  renderSidebar();
+}
+
+function renderSidebar() {
+  updateSidebarSegmented();
+  if (sidebarMode === "terminals") renderTerminalGroups();
+  else renderList();
+}
+
+function renderTerminalGroups() {
+  const list = $("connectionList");
+  list.innerHTML = "";
+
+  if (terminalGroups.size === 0) {
+    const empty = document.createElement("div");
+    empty.className = "connection-item";
+    empty.innerHTML = `<strong>${escapeHtml(t("noTerminals"))}</strong><span>${escapeHtml(t("createTerminalToStart"))}</span>`;
+    list.appendChild(empty);
+    return;
+  }
+
+  for (const group of terminalGroups.values()) {
+    const count = [...terminalSessions.values()].filter((s) => s.kind === "local" && s.groupId === group.id).length;
+    const item = document.createElement("div");
+    item.className = "connection-row";
+
+    const button = document.createElement("button");
+    button.className = `connection-item ${group.id === activeGroupId ? "active" : ""}`;
+    button.innerHTML = `<strong></strong><span></span>`;
+    button.querySelector("strong").textContent = group.title;
+    button.querySelector("span").textContent = t("shellCount", { count });
+    button.addEventListener("click", () => {
+      const g = terminalGroups.get(group.id);
+      const target = (g?.lastSessionId && terminalSessions.has(g.lastSessionId))
+        ? g.lastSessionId
+        : [...terminalSessions.values()].find((s) => s.kind === "local" && s.groupId === group.id)?.id;
+      if (target) selectTerminalSession(target);
+    });
+    item.appendChild(button);
+
+    const close = document.createElement("button");
+    close.type = "button";
+    close.className = "connection-close";
+    close.title = t("closeGroup");
+    close.textContent = "×";
+    close.addEventListener("click", (event) => {
+      event.stopPropagation();
+      closeTerminalGroup(group.id);
+    });
+    item.appendChild(close);
+
+    list.appendChild(item);
+  }
 }
 
 function renderList() {
@@ -575,7 +726,7 @@ function clearForm() {
   $("formTitle").textContent = t("newConnectionTitle");
   setTerminalFocus(false);
   updateAuthUI();
-  renderList();
+  renderSidebar();
 }
 
 function fillConnectionForm(connection) {
@@ -603,13 +754,13 @@ function firstSessionForConnection(connectionId) {
 
 function showConnectionMenu(connectionId) {
   activeConnectionMenuId = connectionId;
-  renderList();
+  renderSidebar();
 }
 
 function hideConnectionMenu() {
   if (!activeConnectionMenuId) return;
   activeConnectionMenuId = "";
-  renderList();
+  renderSidebar();
 }
 
 function loadConnection(connection) {
@@ -617,12 +768,12 @@ function loadConnection(connection) {
   setConnectionError();
   fillConnectionForm(connection);
   setTerminalFocus(false);
-  renderList();
+  renderSidebar();
 }
 
 async function refreshConnections() {
   connections = await api.listConnections();
-  renderList();
+  renderSidebar();
   if (connections.length > 0 && !activeConnectionId) loadConnection(connections[0]);
 }
 
@@ -658,7 +809,7 @@ async function connect(connectionOverride) {
       fillConnectionForm(saved);
       session.connectionId = saved.id;
       activeSessionConnectionId = saved.id;
-      renderList();
+      renderSidebar();
       setStatus("connectedSaved");
     } catch (saveError) {
       setStatus("connectedSaveFailed");
@@ -679,6 +830,108 @@ async function disconnect() {
   const sessionId = activeSessionId;
   await api.disconnect(sessionId);
   removeTerminalSession(sessionId);
+}
+
+let localTerminalCounter = 0;
+
+// 启动一个本地终端会话（可指定继承目录 cwd）
+async function startLocalSession(session, { cwd = "" } = {}) {
+  try {
+    await api.createLocalTerminal({
+      sessionId: session.id,
+      title: session.title,
+      cwd,
+      cols: session.terminal.cols,
+      rows: session.terminal.rows
+    });
+    session.connected = true;
+    session.statusKey = "connected";
+    session.statusValues = {};
+    if (activeSessionId === session.id) setStatus("connected");
+    renderSessionTabs();
+    renderSidebar();
+    fitAndResize();
+  } catch (error) {
+    const message = error.message || String(error);
+    session.statusKey = "error";
+    session.statusValues = {};
+    session.terminal.writeln(`\r\n${t("localTerminalFailed", { message })}`);
+    if (activeSessionId === session.id) setStatus("error");
+  }
+}
+
+// 顶部「新建终端」：在侧栏新增一个终端组（栏目），默认家目录
+async function createTerminalGroup() {
+  localTerminalCounter += 1;
+  const groupId = crypto.randomUUID();
+  const sessionId = crypto.randomUUID();
+  const title = t("localTerminalTitle", { index: localTerminalCounter });
+  terminalGroups.set(groupId, { id: groupId, title, firstSessionId: sessionId, lastSessionId: "" });
+
+  const session = createTerminalSession(sessionId, { name: title }, "local", groupId);
+  sidebarMode = "terminals";
+  selectTerminalSession(sessionId);
+  await startLocalSession(session);
+  updateGroupTitleFromCwd(groupId);
+}
+
+// 取路径最后一节作为终端名
+function lastPathSegment(p) {
+  const norm = String(p || "").replace(/[\\/]+$/, "");
+  if (!norm) return "/";
+  return norm.split(/[\\/]/).pop() || "/";
+}
+
+// 组名以「第一个窗口」当前所在目录的最后一节为准（随 cd 实时更新；Windows 取不到 cwd 时保留占位名）
+async function updateGroupTitleFromCwd(groupId) {
+  const group = terminalGroups.get(groupId);
+  if (!group) return;
+  const first = (group.firstSessionId && terminalSessions.get(group.firstSessionId))
+    || [...terminalSessions.values()].find((s) => s.kind === "local" && s.groupId === groupId);
+  if (!first) return;
+
+  let cwd = "";
+  try { cwd = (await api.localTerminalCwd(first.id)) || ""; } catch {}
+  if (!cwd) return;
+
+  const name = lastPathSegment(cwd);
+  if (!name || name === group.title) return;
+  group.title = name;
+  first.title = name;
+  if (activeSessionId === first.id || terminalSessions.get(activeSessionId)?.groupId === groupId) {
+    $("terminalTitle").textContent = name;
+  }
+  renderSidebar();
+}
+
+// 组内「+」：新建标签并继承当前终端目录（类 cmd+t）
+async function newSessionInGroup(groupId) {
+  const group = terminalGroups.get(groupId);
+  if (!group) return;
+
+  let cwd = "";
+  const current = terminalSessions.get(activeSessionId);
+  if (current?.kind === "local" && current.groupId === groupId) {
+    try { cwd = (await api.localTerminalCwd(current.id)) || ""; } catch {}
+  }
+
+  const sessionId = crypto.randomUUID();
+  const session = createTerminalSession(sessionId, { name: group.title }, "local", groupId);
+  selectTerminalSession(sessionId);
+  await startLocalSession(session, { cwd });
+}
+
+// 关闭整个终端组（断开组内全部会话）
+async function closeTerminalGroup(groupId) {
+  const ids = [...terminalSessions.values()]
+    .filter((s) => s.kind === "local" && s.groupId === groupId)
+    .map((s) => s.id);
+  for (const id of ids) {
+    await api.disconnect(id);
+    removeTerminalSession(id);
+  }
+  terminalGroups.delete(groupId);
+  renderSidebar();
 }
 
 async function openTerminalWindow() {
@@ -721,7 +974,14 @@ function fileSizeLabel(bytes) {
   return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
 }
 
+function canUploadToActiveSession() {
+  const session = terminalSessions.get(activeSessionId);
+  return Boolean(session && session.kind !== "local");
+}
+
 async function uploadDroppedFiles(files, remoteDir = "") {
+  const session = terminalSessions.get(activeSessionId);
+  if (session && session.kind === "local") return; // 本地终端不支持 SFTP 上传
   if (!activeSessionId) {
     setStatus("connectBeforeUploading");
     terminal.writeln(`\r\n${t("connectBeforeDropping")}`);
@@ -764,7 +1024,14 @@ $("connect").addEventListener("click", () => connect());
 $("disconnect").addEventListener("click", disconnect);
 $("toolbarDisconnect").addEventListener("click", disconnect);
 $("popOutTerminal").addEventListener("click", openTerminalWindow);
-$("newConnection").addEventListener("click", clearForm);
+$("segConnections").addEventListener("click", () => {
+  if (sidebarMode === "connections") clearForm(); // 已在链接模式 → 新建连接
+  else setSidebarMode("connections");
+});
+$("segTerminals").addEventListener("click", () => {
+  if (sidebarMode === "terminals") createTerminalGroup(); // 已在终端模式 → 新建终端
+  else setSidebarMode("terminals");
+});
 $("settingsButton").addEventListener("click", showSettings);
 $("themeMode").addEventListener("change", (event) => applyTheme(event.target.value));
 $("languageMode").addEventListener("change", (event) => applyLanguage(event.target.value));
@@ -1012,8 +1279,8 @@ fileListEl.addEventListener("drop", async (event) => {
 
 $("terminal").addEventListener("dragover", (event) => {
   event.preventDefault();
-  event.dataTransfer.dropEffect = activeSessionId ? "copy" : "none";
-  $("terminal").closest(".terminal-panel").classList.add("drag-over");
+  event.dataTransfer.dropEffect = canUploadToActiveSession() ? "copy" : "none";
+  if (canUploadToActiveSession()) $("terminal").closest(".terminal-panel").classList.add("drag-over");
 });
 
 $("terminal").addEventListener("dragleave", () => {
@@ -1076,3 +1343,8 @@ api.onTerminalWindowClosed(({ sessionId }) => {
 refreshConnections().catch((error) => {
   $("status").textContent = error.message;
 });
+
+// 定时刷新各终端组名（跟随第一个窗口的当前目录）
+setInterval(() => {
+  for (const groupId of terminalGroups.keys()) updateGroupTitleFromCwd(groupId);
+}, 2000);

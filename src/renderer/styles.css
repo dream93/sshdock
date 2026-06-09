@@ -161,6 +161,31 @@ h1 {
   white-space: nowrap;
 }
 
+.connection-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1;
+  opacity: 0;
+}
+
+.connection-row:hover .connection-close {
+  opacity: 1;
+}
+
+.connection-close:hover {
+  background: var(--control-hover);
+  color: var(--text);
+}
+
 .connection-menu {
   position: absolute;
   z-index: 5;
@@ -227,6 +252,29 @@ h1 {
 .sidebar-action {
   width: 100%;
   flex: none;
+}
+
+.sidebar-segmented {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  flex: none;
+}
+
+.seg-btn {
+  border: 1px solid var(--border-raised);
+  background: var(--control-bg-strong);
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.seg-btn.active {
+  background: var(--accent);
+  color: var(--accent-text);
+  border-color: var(--accent);
+  font-weight: 700;
 }
 
 .sidebar-action.active,
@@ -465,6 +513,14 @@ button {
   border-color: var(--accent);
   background: var(--control-hover);
   color: var(--text);
+}
+
+.session-tab-add {
+  min-width: 30px;
+  max-width: 30px;
+  padding: 0;
+  font-size: 16px;
+  line-height: 1;
 }
 
 #terminal {
