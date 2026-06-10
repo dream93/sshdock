@@ -353,6 +353,21 @@ function useCellSelectionAnchor(term, container) {
   } catch {}
 }
 
+// 用 WebGL 渲染器替代 xterm 默认的 DOM 渲染器，解决含中文行的选区错位。
+// 根因（实测）：DOM 渲染按「测量字符宽度 + letter-spacing 补偿」排版，macOS 上 Menlo 无中文
+// 字形回退到苹方，而苹方对「连续的全角标点」做上下文压缩——xterm 的 WidthCache 把字符重复
+// 32 遍来测宽，测出的全角标点（：（）。，等）只有单独渲染时的约一半宽，letter-spacing 补偿
+// 过头，标点之后的整行字形向右漂移约 0.8 格；选区高亮和鼠标取列都按列网格计算，于是出现
+// 「高亮框与文字错开、选中内容差一个字符」。WebGL 渲染器逐单元格画字形，天然与网格对齐。
+// WebGL 不可用或上下文丢失时回退 DOM 渲染（dispose 后 xterm 自动回退）。
+function enableWebglRenderer(term) {
+  try {
+    const addon = new window.WebglAddon.WebglAddon();
+    addon.onContextLoss(() => addon.dispose());
+    term.loadAddon(addon);
+  } catch {}
+}
+
 // 修复中文输入法的全角标点（，。！？等）被发成半角英文标点的问题。
 // 根因（实测）：macOS 中文输入法把全角标点当作「按下标点键 → 在 input 事件里插入」处理，
 // 按一下中文逗号只触发一次 keydown（key=","、keyCode=188，无 input/composition 事件）；
@@ -392,6 +407,7 @@ function createTerminalIn(container) {
   const fitAddon = new FitAddonCtor();
   instance.loadAddon(fitAddon);
   instance.open(container);
+  enableWebglRenderer(instance);
   useCellSelectionAnchor(instance, container);
   enableImePunctuation(instance);
   return { terminal: instance, fitAddon };

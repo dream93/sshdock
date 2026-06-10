@@ -39,6 +39,15 @@ const fitAddon = new FitAddonCtor();
 
 terminal.loadAddon(fitAddon);
 terminal.open(document.getElementById("terminal"));
+// 用 WebGL 渲染器替代默认 DOM 渲染：DOM 渲染下苹方回退字体的全角标点宽度被 WidthCache
+// 测偏（连排上下文压缩），letter-spacing 补偿过头使中文行整体右漂约 0.8 格，选区高亮与
+// 鼠标取列全部错位（详见 renderer.js 中 enableWebglRenderer 的说明）。WebGL 按单元格逐格
+// 画字形，与列网格严格对齐；WebGL 不可用或上下文丢失时回退 DOM 渲染。
+try {
+  const webglAddon = new window.WebglAddon.WebglAddon();
+  webglAddon.onContextLoss(() => webglAddon.dispose());
+  terminal.loadAddon(webglAddon);
+} catch {}
 // 焦点交给终端的隐藏 textarea，保证输入法 composition 在终端上正常起始（否则中文可能被当成拼音）
 terminal.focus();
 
