@@ -419,7 +419,7 @@ function showIdleTerminal() {
   $("workspace").classList.remove("terminal-focused");
   updateTerminalActions();
   renderSidebar();
-  requestAnimationFrame(fitAndResize);
+  scheduleFit();
 }
 
 const idlePane = createTerminalPane();
@@ -561,7 +561,10 @@ function selectTerminalSession(sessionId) {
   setTerminalFocus(true);
   renderSessionTabs();
   renderSidebar();
-  requestAnimationFrame(fitAndResize);
+  // 把焦点交给可见终端的隐藏 textarea：否则经侧栏/标签点击切换后，焦点停在按钮上，
+  // 此时输入中文会因 composition 未在终端 textarea 上正常起始而被当成拼音/英文逐字发送。
+  focusTerminal(session.terminal);
+  scheduleFit();
 }
 
 function removeTerminalSession(sessionId) {
@@ -1080,7 +1083,7 @@ function setTerminalFocus(isFocused) {
   $("workspace").classList.toggle("terminal-focused", isFocused);
   updateTerminalActions();
   if (isFocused) $("settingsButton").classList.remove("active");
-  requestAnimationFrame(fitAndResize);
+  scheduleFit();
 }
 
 // 强制重新测量字符单元格尺寸。
@@ -1094,11 +1097,28 @@ function remeasure(term) {
   } catch {}
 }
 
+// 强制重算滚动区高度。隐藏态（display:none）下 xterm 的 Viewport 把视口/滚动条高度量成 0
+// 并缓存，切回可见后若无事件触发就一直沿用，于是滚动条最大值算错：表现为停在半空、或
+// 「滑一下就再也滑不到底」。正常打字会经 onRequestSyncScrollBar 触发它（即「打字才好」）。
+// 这里在 fit 后主动同步一次，对未变化的尺寸会提前返回，开销可忽略。
+function syncViewport(term) {
+  try {
+    term._core?.viewport?.syncScrollArea?.(true);
+  } catch {}
+}
+
 function fitAndResize() {
   const session = terminalSessions.get(activeSessionId);
   if (session) {
     remeasure(session.terminal);
+    // fit 前记录是否吸底：隐藏态（display:none）下 xterm 不刷新视口，切回再 fit 会改变行数，
+    // 但滚动位置仍是陈旧的、停在半空，要等打字触发内部 refresh 才吸底（即「打字才滑到底」）。
+    // 这里在 fit 后主动补一次 scrollToBottom 纠正；用户若在看历史则保留其位置。
+    const buffer = session.terminal.buffer.active;
+    const atBottom = buffer.viewportY >= buffer.baseY;
     session.fitAddon.fit();
+    syncViewport(session.terminal);
+    if (atBottom) session.terminal.scrollToBottom();
     const { cols, rows } = session.terminal;
     // 仅在行列变化时同步 PTY，避免 ResizeObserver 高频触发导致的 IPC 抖动
     if (Number.isFinite(cols) && Number.isFinite(rows) && (session.lastCols !== cols || session.lastRows !== rows)) {
@@ -1110,6 +1130,24 @@ function fitAndResize() {
   }
   remeasure(idleTerminal);
   idleFitAddon.fit();
+}
+
+// 跨两帧重排：切换会话/分组时会同步切换 .terminal-focused（折叠配置面板）与
+// .session-tabs（标签栏显隐），这些都会改变终端可视高度。仅靠一次 rAF 有时会赶在
+// 浏览器把新布局落实之前就 fit，导致高度（尤其标签栏显隐方向）不跟随；多排一帧确保
+// 布局稳定后再 fit 一次，宽高一并纠正。
+function scheduleFit() {
+  requestAnimationFrame(() => {
+    fitAndResize();
+    requestAnimationFrame(fitAndResize);
+  });
+}
+
+// 让指定终端的隐藏 textarea 获得焦点，保证后续键盘/输入法事件落在该终端上
+function focusTerminal(term) {
+  try {
+    term?.focus();
+  } catch {}
 }
 
 function fileSizeLabel(bytes) {

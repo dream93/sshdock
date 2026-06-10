@@ -39,6 +39,8 @@ const fitAddon = new FitAddonCtor();
 
 terminal.loadAddon(fitAddon);
 terminal.open(document.getElementById("terminal"));
+// 焦点交给终端的隐藏 textarea，保证输入法 composition 在终端上正常起始（否则中文可能被当成拼音）
+terminal.focus();
 
 // 修复中文输入法的全角标点（，。！？等）被发成半角英文标点的问题。
 // 根因：macOS 中文输入法把全角标点当作「按下标点键 → 在 input 事件里插入」处理，按一下中文逗号
@@ -112,9 +114,22 @@ function remeasure() {
 
 let lastCols = 0;
 let lastRows = 0;
+// 强制重算滚动区高度：窗口后台/遮挡时 xterm 的 Viewport 把视口高度量成 0 并缓存，恢复前台后
+// 若无事件触发就一直沿用，滚动条最大值算错 → 停在半空或「滑一下就再也滑不到底」，要打字才好
+// （打字会经 onRequestSyncScrollBar 触发它）。此处在 fit 后主动同步，未变化的尺寸会提前返回。
+function syncViewport() {
+  try {
+    terminal._core?.viewport?.syncScrollArea?.(true);
+  } catch {}
+}
+
 function fitAndResize() {
   remeasure();
+  const buffer = terminal.buffer.active;
+  const atBottom = buffer.viewportY >= buffer.baseY;
   fitAddon.fit();
+  syncViewport();
+  if (atBottom) terminal.scrollToBottom();
   // 仅在行列变化时同步 PTY，避免 ResizeObserver 高频触发导致的 IPC 抖动
   if (sessionId && Number.isFinite(terminal.cols) && Number.isFinite(terminal.rows) &&
       (terminal.cols !== lastCols || terminal.rows !== lastRows)) {
@@ -187,7 +202,10 @@ document.fonts?.ready?.then(fitAndResize);
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") requestAnimationFrame(fitAndResize);
 });
-window.addEventListener("focus", () => requestAnimationFrame(fitAndResize));
+window.addEventListener("focus", () => {
+  terminal.focus();
+  requestAnimationFrame(fitAndResize);
+});
 systemThemeQuery.addEventListener("change", applyTheme);
 
 api.terminalSnapshot(sessionId).then((snapshot) => {
