@@ -57,9 +57,15 @@ terminal.focus();
 // 会先把半角 ASCII 发出去并 preventDefault，反而阻断了输入法的全角转换。
 // 做法：对可被输入法转换的标点/符号键放行 keydown，改由监听 textarea 的 input 事件转发最终插入的
 // 字符（中文模式得全角、英文模式得半角，均正确）；汉字走 composition 通道由 xterm 自身处理。
+// 注意：英文/直接键入的标点在放行 keydown 后会触发 keypress，xterm 在 _keyPress 里已把字符发出，
+// 必须清掉 pending，否则 input 事件再转发一次就是双发；中文输入法无 keypress，不受影响。
 (function enableImePunctuation() {
   let pending = false;
   terminal.attachCustomKeyEventHandler((event) => {
+    if (event.type === "keypress") {
+      pending = false; // 该按键由 xterm 的 keypress 路径发送，input 事件不再转发
+      return true;
+    }
     if (event.type !== "keydown") return true;
     pending = false;
     if (event.key && event.key.length === 1 && !event.ctrlKey && !event.altKey &&
