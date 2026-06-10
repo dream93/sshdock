@@ -353,12 +353,47 @@ function useCellSelectionAnchor(term, container) {
   } catch {}
 }
 
+// 修复中文输入法的全角标点（，。！？等）被发成半角英文标点的问题。
+// 根因（实测）：macOS 中文输入法把全角标点当作「按下标点键 → 在 input 事件里插入」处理，
+// 按一下中文逗号只触发一次 keydown（key=","、keyCode=188，无 input/composition 事件）；
+// 而 xterm 的 keydown 处理器会先把对应的半角 ASCII 发出去并 preventDefault，反而把输入法的
+// 全角转换给阻断了（连 input 事件都没机会触发）。
+// 做法：对「可被输入法转换的标点/符号键」放行 keydown（让 xterm 不处理、也不 preventDefault），
+// 改由监听 textarea 的 input 事件转发输入法最终插入的字符——中文模式得到全角，英文模式得到半角，
+// 两者都正确。汉字本身走 keyCode 229 的 composition 通道，由 xterm 自身处理，不受影响。
+function enableImePunctuation(term) {
+  let pending = false;
+  term.attachCustomKeyEventHandler((event) => {
+    if (event.type !== "keydown") return true;
+    pending = false;
+    // 单字符、无 Ctrl/Alt/Meta、非空格、非字母数字 → 视为可能被输入法转换的标点/符号
+    if (event.key && event.key.length === 1 && !event.ctrlKey && !event.altKey &&
+        !event.metaKey && event.key !== " " && !/[a-zA-Z0-9]/.test(event.key)) {
+      pending = true;  // 本次按键交给随后的 input 事件转发
+      return false;    // 让 xterm 不处理此 keydown（不发半角、不 preventDefault）
+    }
+    return true;
+  });
+  const textarea = term.textarea;
+  if (!textarea) return;
+  textarea.addEventListener("input", (event) => {
+    if (!pending) return;
+    pending = false;
+    if (event.isComposing) return; // 组合输入中（极少数情况）交给 xterm 自身处理
+    if (typeof event.data === "string" && event.data) {
+      term.input(event.data, true); // 触发 onData，走既有发送链路送到 PTY
+    }
+    textarea.value = ""; // 清掉残留，避免字符在隐藏 textarea 里累积
+  });
+}
+
 function createTerminalIn(container) {
   const instance = new TerminalCtor(terminalOptions());
   const fitAddon = new FitAddonCtor();
   instance.loadAddon(fitAddon);
   instance.open(container);
   useCellSelectionAnchor(instance, container);
+  enableImePunctuation(instance);
   return { terminal: instance, fitAddon };
 }
 
