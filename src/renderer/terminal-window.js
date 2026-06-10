@@ -39,6 +39,37 @@ const fitAddon = new FitAddonCtor();
 
 terminal.loadAddon(fitAddon);
 terminal.open(document.getElementById("terminal"));
+
+// 修复中文输入法的全角标点（，。！？等）被发成半角英文标点的问题。
+// 根因：macOS 中文输入法把全角标点当作「按下标点键 → 在 input 事件里插入」处理，按一下中文逗号
+// 只触发一次 keydown（key=","、keyCode=188，无 input/composition 事件），而 xterm 的 keydown
+// 会先把半角 ASCII 发出去并 preventDefault，反而阻断了输入法的全角转换。
+// 做法：对可被输入法转换的标点/符号键放行 keydown，改由监听 textarea 的 input 事件转发最终插入的
+// 字符（中文模式得全角、英文模式得半角，均正确）；汉字走 composition 通道由 xterm 自身处理。
+(function enableImePunctuation() {
+  let pending = false;
+  terminal.attachCustomKeyEventHandler((event) => {
+    if (event.type !== "keydown") return true;
+    pending = false;
+    if (event.key && event.key.length === 1 && !event.ctrlKey && !event.altKey &&
+        !event.metaKey && event.key !== " " && !/[a-zA-Z0-9]/.test(event.key)) {
+      pending = true;
+      return false;
+    }
+    return true;
+  });
+  const textarea = terminal.textarea;
+  if (!textarea) return;
+  textarea.addEventListener("input", (event) => {
+    if (!pending) return;
+    pending = false;
+    if (event.isComposing) return;
+    if (typeof event.data === "string" && event.data) {
+      terminal.input(event.data, true);
+    }
+    textarea.value = "";
+  });
+})();
 document.getElementById("terminalTitle").textContent = initialTitle;
 document.title = `${initialTitle} - SSHDock`;
 
