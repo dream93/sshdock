@@ -448,6 +448,13 @@ button {
   min-height: 0;
 }
 
+/* 三个子元素显式定行：标签栏（.session-tabs）隐藏是 display:none，会从网格自动布局中消失，
+   若靠自动占位，#terminal 会被顶进第二行（auto），高度塌成 0（终端只剩 1 行，输出像“没回显”）。
+   SSH 单会话正是标签栏隐藏的形态，必须显式把 #terminal 钉在 1fr 行。 */
+.terminal-toolbar { grid-row: 1; }
+.terminal-panel > .session-tabs { grid-row: 2; }
+.terminal-panel > #terminal { grid-row: 3; }
+
 .terminal-toolbar {
   display: flex;
   align-items: center;
