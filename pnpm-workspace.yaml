@@ -1,0 +1,9 @@
+# electron-builder 无法跟随 pnpm 默认的符号链接式 node_modules 收集传递依赖
+# （打包后运行时报 Cannot find module 'asn1'），必须使用扁平布局
+nodeLinker: hoisted
+
+allowBuilds:
+  cpu-features: true
+  electron: true
+  node-pty: true
+  ssh2: true
