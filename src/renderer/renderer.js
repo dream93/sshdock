@@ -376,9 +376,16 @@ function enableWebglRenderer(term) {
 // 做法：对「可被输入法转换的标点/符号键」放行 keydown（让 xterm 不处理、也不 preventDefault），
 // 改由监听 textarea 的 input 事件转发输入法最终插入的字符——中文模式得到全角，英文模式得到半角，
 // 两者都正确。汉字本身走 keyCode 229 的 composition 通道，由 xterm 自身处理，不受影响。
+// 注意：英文/直接键入的标点在放行 keydown 后会触发 keypress，xterm 在 _keyPress 里已把字符
+// 发送出去；此时必须清掉 pending，否则随后的 input 事件再转发一次就成了双发（每个标点出现两遍）。
+// 中文输入法插入全角标点不产生 keypress，仍由 input 事件转发，不受影响。
 function enableImePunctuation(term) {
   let pending = false;
   term.attachCustomKeyEventHandler((event) => {
+    if (event.type === "keypress") {
+      pending = false; // 该按键由 xterm 的 keypress 路径发送，input 事件不再转发
+      return true;
+    }
     if (event.type !== "keydown") return true;
     pending = false;
     // 单字符、无 Ctrl/Alt/Meta、非空格、非字母数字 → 视为可能被输入法转换的标点/符号
