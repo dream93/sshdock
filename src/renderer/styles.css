@@ -534,6 +534,12 @@ button {
   inset: 0;
   min-height: 0;
   padding: 10px;
+  /* 用 content-box 抵消全局的 border-box：xterm 的 FitAddon 用 getComputedStyle(parent).width
+     当作终端可用宽度，而 border-box + 拉伸（这里 inset:0）下该值会算成「含 padding 的边框盒宽」，
+     使左右各 10px 的 padding 没被扣掉，FitAddon 因此多算约 2 列，末列字符被画到右侧滚动条下面
+     （一连上就有）。改成 content-box 后该值正确返回内容盒宽度；inset:0 仍把边框盒钉满父级，
+     padding 与视觉布局不变。详见 .detached-terminal 的同款处理。 */
+  box-sizing: content-box;
 }
 
 .terminal-instance.hidden {
@@ -709,6 +715,9 @@ button {
 .detached-terminal {
   min-height: 0;
   padding: 10px;
+  /* 同 .terminal-instance：抵消全局 border-box，避免 FitAddon 把 padding 算进终端可用宽度
+     导致末列字符压到右侧滚动条上。grid 拉伸同样把边框盒钉满，padding 与布局不变。 */
+  box-sizing: content-box;
 }
 
 @media (max-width: 1080px) {
