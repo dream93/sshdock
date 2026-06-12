@@ -64,6 +64,8 @@ select {
 .app-shell {
   display: grid;
   grid-template-columns: 280px 1fr;
+  /* 锁定行高为视口高度，否则侧栏内容过多时会把隐式行撑高，列表无法滚动 */
+  grid-template-rows: minmax(0, 1fr);
   height: 100vh;
 }
 
@@ -74,6 +76,8 @@ select {
   padding: 22px;
   border-right: 1px solid var(--border);
   background: var(--sidebar-bg);
+  min-height: 0;
+  overflow: hidden;
 }
 
 .brand {
