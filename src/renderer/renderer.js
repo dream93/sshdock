@@ -359,17 +359,22 @@ function useCellSelectionAnchor(term, container) {
   } catch {}
 }
 
-// 用 WebGL 渲染器替代 xterm 默认的 DOM 渲染器，解决含中文行的选区错位。
+// 用 Canvas 渲染器替代 xterm 默认的 DOM 渲染器，解决含中文行的选区错位。
 // 根因（实测）：DOM 渲染按「测量字符宽度 + letter-spacing 补偿」排版，macOS 上 Menlo 无中文
 // 字形回退到苹方，而苹方对「连续的全角标点」做上下文压缩——xterm 的 WidthCache 把字符重复
 // 32 遍来测宽，测出的全角标点（：（）。，等）只有单独渲染时的约一半宽，letter-spacing 补偿
 // 过头，标点之后的整行字形向右漂移约 0.8 格；选区高亮和鼠标取列都按列网格计算，于是出现
-// 「高亮框与文字错开、选中内容差一个字符」。WebGL 渲染器逐单元格画字形，天然与网格对齐。
-// WebGL 不可用或上下文丢失时回退 DOM 渲染（dispose 后 xterm 自动回退）。
-function enableWebglRenderer(term) {
+// 「高亮框与文字错开、选中内容差一个字符」。Canvas/WebGL 渲染器都逐单元格画字形，与网格对齐。
+//
+// 为什么选 Canvas 而非 WebGL：WebGL 渲染器把字形烤进 GPU 纹理图集，逐格记 UV 取字形。中文场景
+// 不同字形极多，图集分页/合并时（xterm 已知缺陷）若赶上当帧重绘，格子 UV 会指偏，画出图集里
+// 别的字形——表现为「中文位置间歇冒出 H/1/^ 等乱字符并与邻格重影」；且 WebGL 逐行不裁剪，溢出
+// 的苹方字形会糊进邻格。Canvas 渲染器走 canvas 2D、逐行裁剪、不做「改 GPU 纹理 + 当帧重绘」这个
+// 会损坏的动作，既保持逐格对齐（选区不错位），又绕开上述两个病根。
+// Canvas addon 不可用时回退 DOM 渲染（dispose 后 xterm 自动回退）。
+function enableCanvasRenderer(term) {
   try {
-    const addon = new window.WebglAddon.WebglAddon();
-    addon.onContextLoss(() => addon.dispose());
+    const addon = new window.CanvasAddon.CanvasAddon();
     term.loadAddon(addon);
   } catch {}
 }
@@ -420,7 +425,7 @@ function createTerminalIn(container) {
   const fitAddon = new FitAddonCtor();
   instance.loadAddon(fitAddon);
   instance.open(container);
-  enableWebglRenderer(instance);
+  enableCanvasRenderer(instance);
   useCellSelectionAnchor(instance, container);
   enableImePunctuation(instance);
   return { terminal: instance, fitAddon };
