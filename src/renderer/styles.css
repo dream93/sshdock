@@ -491,6 +491,29 @@ button {
   font-size: 13px;
 }
 
+/* 工具栏中部:实时机器状态(CPU/内存/网络/负载),等宽数字避免每秒刷新时抖动 */
+.session-stats {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  gap: 14px;
+  justify-content: center;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.session-stats .stat-item {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.session-stats .stat-label {
+  opacity: 0.7;
+}
+
 .session-tabs {
   display: flex;
   min-width: 0;

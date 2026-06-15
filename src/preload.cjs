@@ -26,6 +26,7 @@ contextBridge.exposeInMainWorld("sshDock", {
   openTerminalWindow: (payload) => ipcRenderer.invoke("terminal:open-window", payload),
   terminalSnapshot: (sessionId) => ipcRenderer.invoke("terminal:snapshot", sessionId),
   onData: (callback) => ipcRenderer.on("ssh:data", (_event, payload) => callback(payload)),
+  onStats: (callback) => ipcRenderer.on("ssh:stats", (_event, payload) => callback(payload)),
   onUploadProgress: (callback) => ipcRenderer.on("ssh:upload-progress", (_event, payload) => callback(payload)),
   onDownloadProgress: (callback) => ipcRenderer.on("ssh:download-progress", (_event, payload) => callback(payload)),
   onClosed: (callback) => ipcRenderer.on("ssh:closed", (_event, payload) => callback(payload)),

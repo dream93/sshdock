@@ -411,6 +411,7 @@ ipcMain.handle("ssh:connect", async (_event, payload) => {
           }
 
           sessions.set(sessionId, { client, stream, history: "", title: connection.name || connection.host || "Terminal" });
+          startStatsPolling(sessionId);
 
           stream.on("data", (data) => {
             const text = data.toString("utf8");
@@ -426,7 +427,7 @@ ipcMain.handle("ssh:connect", async (_event, payload) => {
 
           stream.on("close", () => {
             const closing = sessions.get(sessionId);
-            if (closing) closeSftp(closing);
+            if (closing) { stopStatsPolling(closing); closeSftp(closing); }
             sessions.delete(sessionId);
             sendSessionEvent(sessionId, "ssh:closed", { sessionId });
             closeTerminalWindows(sessionId);
@@ -439,14 +440,14 @@ ipcMain.handle("ssh:connect", async (_event, payload) => {
       })
       .on("error", (error) => {
         const failing = sessions.get(sessionId);
-        if (failing) closeSftp(failing);
+        if (failing) { stopStatsPolling(failing); closeSftp(failing); }
         sessions.delete(sessionId);
         if (!settled) reject(error);
         else sendSessionEvent(sessionId, "ssh:error", { sessionId, message: error.message });
       })
       .on("close", () => {
         const closing = sessions.get(sessionId);
-        if (closing) closeSftp(closing);
+        if (closing) { stopStatsPolling(closing); closeSftp(closing); }
         sessions.delete(sessionId);
         sendSessionEvent(sessionId, "ssh:closed", { sessionId });
         closeTerminalWindows(sessionId);
@@ -473,6 +474,7 @@ ipcMain.on("ssh:resize", (_event, payload) => {
 ipcMain.handle("ssh:disconnect", (_event, sessionId) => {
   const session = sessions.get(sessionId);
   if (session) {
+    stopStatsPolling(session);
     closeSftp(session);
     if (session.pty) {
       try { session.pty.kill(); } catch {}
@@ -489,6 +491,130 @@ function closeSftp(session) {
   if (session?.sftp) {
     try { session.sftp.end(); } catch {}
     session.sftp = null;
+  }
+}
+
+// 一次性读取 Linux /proc 下的 CPU/内存/网络/负载,用分隔标记便于解析
+const STATS_CMD =
+  "echo @@S; cat /proc/stat; echo @@M; cat /proc/meminfo; echo @@N; cat /proc/net/dev; echo @@L; cat /proc/loadavg";
+
+// 解析 STATS_CMD 的输出为一次采样;非 Linux(无 /proc)返回 null
+function parseProcStats(raw) {
+  if (!raw) return null;
+  const section = { S: [], M: [], N: [], L: [] };
+  let current = null;
+  for (const line of raw.split("\n")) {
+    const mark = line.match(/^@@([SMNL])\s*$/);
+    if (mark) { current = mark[1]; continue; }
+    if (current) section[current].push(line);
+  }
+
+  // CPU:汇总行 "cpu  u n s idle iowait irq softirq steal ..."
+  const cpuLine = section.S.find((l) => /^cpu\s/.test(l));
+  if (!cpuLine) return null;
+  const cpuFields = cpuLine.trim().split(/\s+/).slice(1).map(Number);
+  if (cpuFields.length < 5 || cpuFields.some(Number.isNaN)) return null;
+  const cpuTotal = cpuFields.reduce((a, b) => a + b, 0);
+  const cpuIdle = (cpuFields[3] || 0) + (cpuFields[4] || 0); // idle + iowait
+
+  // 内存:MemTotal / MemAvailable(单位 KB)
+  let memTotal = 0;
+  let memAvailable = 0;
+  for (const l of section.M) {
+    const m = l.match(/^(MemTotal|MemAvailable):\s+(\d+)\s*kB/);
+    if (m) {
+      if (m[1] === "MemTotal") memTotal = Number(m[2]) * 1024;
+      else memAvailable = Number(m[2]) * 1024;
+    }
+  }
+  if (!memTotal) return null;
+
+  // 网络:累加非 lo 接口的累计 rx/tx 字节
+  let rx = 0;
+  let tx = 0;
+  for (const l of section.N) {
+    const m = l.match(/^\s*([^:]+):\s*(.+)$/);
+    if (!m) continue;
+    const iface = m[1].trim();
+    if (iface === "lo") continue;
+    const cols = m[2].trim().split(/\s+/).map(Number);
+    // /proc/net/dev: rx_bytes 是第 1 列, tx_bytes 是第 9 列
+    if (cols.length >= 9) {
+      rx += cols[0] || 0;
+      tx += cols[8] || 0;
+    }
+  }
+
+  const load1 = Number((section.L[0] || "").trim().split(/\s+/)[0]) || 0;
+
+  return { ts: Date.now(), cpuIdle, cpuTotal, memTotal, memAvailable, rx, tx, load1 };
+}
+
+// 由相邻两次采样算出展示指标;首次(无 prev)返回 null
+function computeStatsDelta(prev, cur) {
+  if (!prev) return null;
+  const totalDelta = cur.cpuTotal - prev.cpuTotal;
+  const idleDelta = cur.cpuIdle - prev.cpuIdle;
+  const cpuPercent = totalDelta > 0
+    ? Math.min(100, Math.max(0, (1 - idleDelta / totalDelta) * 100))
+    : 0;
+  const dt = (cur.ts - prev.ts) / 1000 || 1;
+  const rxRate = Math.max(0, (cur.rx - prev.rx) / dt);
+  const txRate = Math.max(0, (cur.tx - prev.tx) / dt);
+  const memUsed = cur.memTotal - cur.memAvailable;
+  const memPercent = cur.memTotal > 0 ? (memUsed / cur.memTotal) * 100 : 0;
+  return {
+    cpuPercent: Math.round(cpuPercent),
+    memUsed,
+    memTotal: cur.memTotal,
+    memPercent: Math.round(memPercent),
+    rxRate,
+    txRate,
+    load1: cur.load1
+  };
+}
+
+// 每 2 秒采集一次远程机器状态并推送给渲染层;仅在 SSH 会话上调用
+function startStatsPolling(sessionId) {
+  const session = sessions.get(sessionId);
+  if (!session?.client) return;
+  session.statsPrev = null;
+
+  const tick = () => {
+    const s = sessions.get(sessionId);
+    if (!s?.client) return;
+    s.client.exec(STATS_CMD, (err, stream) => {
+      if (err) return;
+      let out = "";
+      stream.on("data", (d) => { out += d.toString("utf8"); });
+      stream.stderr.on("data", () => {});
+      stream.on("close", () => {
+        const live = sessions.get(sessionId);
+        if (!live) return;
+        const cur = parseProcStats(out);
+        if (!cur) {
+          // 非 Linux 或读取失败:停止轮询,通知渲染层隐藏
+          stopStatsPolling(live);
+          sendSessionEvent(sessionId, "ssh:stats", { sessionId, supported: false });
+          return;
+        }
+        const metrics = computeStatsDelta(live.statsPrev, cur);
+        live.statsPrev = cur;
+        if (metrics) {
+          sendSessionEvent(sessionId, "ssh:stats", { sessionId, supported: true, ...metrics });
+        }
+      });
+    });
+  };
+
+  session.statsTimer = setInterval(tick, 2000);
+  tick(); // 立即取基线
+}
+
+function stopStatsPolling(session) {
+  if (session?.statsTimer) {
+    clearInterval(session.statsTimer);
+    session.statsTimer = null;
   }
 }
 
