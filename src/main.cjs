@@ -379,6 +379,10 @@ ipcMain.handle("terminal:snapshot", (_event, sessionId) => {
 ipcMain.handle("ssh:connect", async (_event, payload) => {
   const connection = sanitizeConnection(payload.connection || {});
   const sessionId = payload.sessionId || crypto.randomUUID();
+  // 按渲染端传入的真实可视尺寸打开远端 shell，避免以固定值打开导致远端按错误列数折行
+  // （远端 bash 在第 N 列折行、xterm 按真实宽度渲染 → 长命令/行内编辑光标错位、重影）。
+  const initialCols = Number(payload.cols) || 100;
+  const initialRows = Number(payload.rows) || 30;
   const client = new Client();
 
   const connectConfig = {
@@ -403,7 +407,7 @@ ipcMain.handle("ssh:connect", async (_event, payload) => {
 
     client
       .on("ready", () => {
-        client.shell({ term: "xterm-256color", cols: 100, rows: 30 }, (error, stream) => {
+        client.shell({ term: "xterm-256color", cols: initialCols, rows: initialRows }, (error, stream) => {
           if (error) {
             client.end();
             if (!settled) reject(error);

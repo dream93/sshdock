@@ -898,14 +898,26 @@ async function connect(connectionOverride) {
   selectTerminalSession(sessionId);
   session.terminal.writeln(t("connectingTo", { target: `${connection.username}@${connection.host}:${connection.port}` }));
 
+  // selectTerminalSession 里的 fit 是异步（rAF），这里同步 fit 一次拿到真实可视尺寸，
+  // 让远端 shell 直接按真实 cols/rows 打开（否则会以默认/固定尺寸开，远端按错误列数折行）。
+  try { session.fitAddon.fit(); } catch {}
+
   try {
     await api.connect({
       sessionId,
       connection,
       password: $("password").value,
-      passphrase: $("passphrase").value
+      passphrase: $("passphrase").value,
+      cols: session.terminal.cols,
+      rows: session.terminal.rows
     });
     session.connected = true;
+    // PTY 此刻才真正建立：连接握手期间（约数百毫秒）窗口若被缩放，selectTerminalSession
+    // 发出的 resize 早已因会话不存在而被丢弃，且 fit 已把 lastCols/lastRows 记成当时的值、
+    // 后续会被去重逻辑拦截。这里清掉去重基准并强制重发一次真实尺寸，确保远端与渲染端一致。
+    session.lastCols = undefined;
+    session.lastRows = undefined;
+    if (activeSessionId === sessionId) fitAndResize();
     try {
       const saved = await api.saveConnection(connection);
       connections = await api.listConnections();
