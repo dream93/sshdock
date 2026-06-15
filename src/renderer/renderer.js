@@ -84,6 +84,9 @@ const messages = {
     connecting: "Connecting",
     connectingTo: "Connecting to {target}...",
     connected: "Connected",
+    statsCpu: "CPU",
+    statsMem: "MEM",
+    statsLoad: "Load",
     connectionFailed: "Connection failed",
     connectionFailedDetail: "Connection failed: {message}",
     disconnected: "Disconnected",
@@ -182,6 +185,9 @@ const messages = {
     connecting: "正在连接",
     connectingTo: "正在连接到 {target}...",
     connected: "已连接",
+    statsCpu: "CPU",
+    statsMem: "内存",
+    statsLoad: "负载",
     connectionFailed: "连接失败",
     connectionFailedDetail: "连接失败：{message}",
     disconnected: "已断开",
@@ -483,6 +489,7 @@ function createTerminalSession(sessionId, connection, kind = "ssh", groupId = ""
     title: connection.name || connection.host,
     statusKey: "connecting",
     statusValues: {},
+    stats: null,
     detached: false,
     pane: pane.pane,
     terminal: pane.terminal,
@@ -581,6 +588,7 @@ function selectTerminalSession(sessionId) {
   // 本地终端的顶部标题显示组名（= 第一个窗口所在目录最后一节）
   $("terminalTitle").textContent = group?.title || session.title;
   setStatus(session.statusKey, session.statusValues);
+  renderSessionStats();
   setTerminalFocus(true);
   renderSessionTabs();
   renderSidebar();
@@ -1173,6 +1181,28 @@ function focusTerminal(term) {
   } catch {}
 }
 
+// 把当前活动 SSH 会话的机器状态渲染到工具栏中部;非 SSH/无数据/不支持时隐藏
+function renderSessionStats() {
+  const el = $("sessionStats");
+  if (!el) return;
+  const session = terminalSessions.get(activeSessionId);
+  const stats = session?.stats;
+  if (!session || session.kind === "local" || !stats || stats.supported === false) {
+    el.classList.add("hidden");
+    el.innerHTML = "";
+    return;
+  }
+  const item = (label, value) =>
+    `<span class="stat-item"><span class="stat-label">${label}</span><span>${value}</span></span>`;
+  el.innerHTML = [
+    item(t("statsCpu"), `${stats.cpuPercent}%`),
+    item(t("statsMem"), `${stats.memPercent}% (${fileSizeLabel(stats.memUsed)}/${fileSizeLabel(stats.memTotal)})`),
+    item("", `↓${fileSizeLabel(stats.rxRate)}/s ↑${fileSizeLabel(stats.txRate)}/s`),
+    item(t("statsLoad"), stats.load1.toFixed(2))
+  ].join("");
+  el.classList.remove("hidden");
+}
+
 function fileSizeLabel(bytes) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -1568,6 +1598,13 @@ function writeFollowingBottom(term, data) {
 api.onData(({ sessionId, data }) => {
   const session = terminalSessions.get(sessionId);
   if (session) writeFollowingBottom(session.terminal, data);
+});
+
+api.onStats((payload) => {
+  const session = terminalSessions.get(payload.sessionId);
+  if (!session) return;
+  session.stats = payload;
+  if (payload.sessionId === activeSessionId) renderSessionStats();
 });
 
 api.onUploadProgress(({ sessionId, uploadId, fileName, transferred, total }) => {
