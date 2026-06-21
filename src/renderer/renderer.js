@@ -1214,17 +1214,19 @@ function renderSessionStats() {
   el.innerHTML = [
     item(t("statsCpu"), `${stats.cpuPercent}%`),
     item(t("statsMem"), `${stats.memPercent}% (${fileSizeLabel(stats.memUsed)}/${fileSizeLabel(stats.memTotal)})`),
-    item("", `↓${fileSizeLabel(stats.rxRate)}/s ↑${fileSizeLabel(stats.txRate)}/s`),
+    item("", `↓${fileSizeLabel(stats.rxRate, 2)}/s ↑${fileSizeLabel(stats.txRate, 2)}/s`),
     item(t("statsLoad"), stats.load1.toFixed(2))
   ].join("");
   el.classList.remove("hidden");
 }
 
-function fileSizeLabel(bytes) {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-  return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
+function fileSizeLabel(bytes, fractionDigits) {
+  const formatNumber = (value) => fractionDigits == null ? value : value.toFixed(fractionDigits);
+  const defaultScaledDigits = fractionDigits ?? 1;
+  if (bytes < 1024) return `${formatNumber(bytes)} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(defaultScaledDigits)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(defaultScaledDigits)} MB`;
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(defaultScaledDigits)} GB`;
 }
 
 // POSIX shell：反斜杠转义空格及常见元字符，匹配 macOS Terminal 拖入路径的行为

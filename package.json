@@ -1,6 +1,6 @@
 {
   "name": "sshdock",
-  "version": "0.1.2",
+  "version": "1.0.0",
   "description": "A visual cross-platform SSH shell client with password and key authentication.",
   "main": "src/main.cjs",
   "author": "SSHDock",
