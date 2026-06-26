@@ -3,7 +3,7 @@ const path = require("path");
 const fs = require("fs");
 const os = require("os");
 const crypto = require("crypto");
-const { execFile } = require("child_process");
+const { execFile, execFileSync } = require("child_process");
 const { Client } = require("ssh2");
 
 let pty = null;
@@ -20,6 +20,53 @@ function defaultShell() {
   const file = process.env.SHELL || "/bin/bash";
   // 交互式登录 shell，确保加载用户配置（.zshrc/.bash_profile 等）
   return { file, args: ["-l"] };
+}
+
+// 判断某个会话是否「有任务在运行」（用于关闭前提示确认）。
+// 本地终端：shell 若有前台子进程（如 claude、vim、长命令）即视为有任务；停在提示符时无子进程。
+// SSH 会话：shell 在远端，本地无法可靠探测前台进程，退化为「连接中即视为有任务」。
+function localShellBusy(pty) {
+  const pid = pty?.pid;
+  if (!pid) return false;
+  // Windows 下无 pgrep，且子进程树探测代价高，暂不阻塞（返回 false）
+  if (process.platform === "win32") return false;
+  try {
+    // pgrep -P <shell pid>：有直接子进程 → 退出码 0；停在提示符无子进程 → 退出码 1（抛错）
+    execFileSync("pgrep", ["-P", String(pid)], { stdio: ["ignore", "ignore", "ignore"] });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function sessionHasActiveTask(sessionId) {
+  const session = sessions.get(String(sessionId || ""));
+  if (!session) return false;
+  if (session.isLocal) return localShellBusy(session.pty);
+  // SSH：会话存在于 sessions 即已连接成功，按「连接中」提示确认
+  return true;
+}
+
+function anySessionHasActiveTask() {
+  for (const id of sessions.keys()) {
+    if (sessionHasActiveTask(id)) return true;
+  }
+  return false;
+}
+
+// 关闭前的同步确认框：返回 true 表示用户选择「仍然关闭」
+function confirmCloseWithTask(parentWindow, message) {
+  const result = dialog.showMessageBoxSync(parentWindow, {
+    type: "warning",
+    buttons: ["仍然关闭", "取消"],
+    defaultId: 1,
+    cancelId: 1,
+    noLink: true,
+    title: "SSHDock",
+    message,
+    detail: "关闭后正在运行的任务会被中断。"
+  });
+  return result === 0;
 }
 
 let mainWindow;
@@ -150,6 +197,19 @@ function createWindow() {
     }
   });
 
+  // 关闭主窗口（红灯/Cmd+W）或退出 App（Cmd+Q，退出时各窗口同样收到 close）前：
+  // 若任一会话仍有任务在运行，弹同步确认框；用户取消则阻止关闭。
+  let allowClose = false;
+  mainWindow.on("close", (event) => {
+    if (allowClose) return;
+    if (!anySessionHasActiveTask()) return;
+    if (confirmCloseWithTask(mainWindow, "仍有终端任务在运行，确定关闭吗？")) {
+      allowClose = true;
+    } else {
+      event.preventDefault();
+    }
+  });
+
   mainWindow.loadFile(path.join(__dirname, "renderer", "index.html"));
 }
 
@@ -216,6 +276,18 @@ function createTerminalWindow(sessionId, title, kind = "ssh") {
   });
 
   sessionWindows(sessionId).add(terminalWindow);
+  // 手动关闭弹出的独立终端窗口时，若该会话仍有任务在运行则确认；
+  // 程序化关闭（会话已结束触发 closeTerminalWindows）时会话已从 sessions 移除，不会误拦。
+  let allowWindowClose = false;
+  terminalWindow.on("close", (event) => {
+    if (allowWindowClose) return;
+    if (!sessionHasActiveTask(sessionId)) return;
+    if (confirmCloseWithTask(terminalWindow, "该终端仍有任务在运行，确定关闭窗口吗？")) {
+      allowWindowClose = true;
+    } else {
+      event.preventDefault();
+    }
+  });
   terminalWindow.on("closed", () => {
     const windows = terminalWindows.get(sessionId);
     if (windows) {
@@ -366,6 +438,9 @@ ipcMain.handle("terminal:open-window", (_event, payload) => {
   createTerminalWindow(sessionId, String(payload?.title || "Terminal"), String(payload?.kind || "ssh"));
   return true;
 });
+
+// 渲染端在关闭单个会话 / 终端组前查询是否有任务在运行
+ipcMain.handle("terminal:has-active-task", (_event, sessionId) => sessionHasActiveTask(sessionId));
 
 ipcMain.handle("terminal:snapshot", (_event, sessionId) => {
   const session = sessions.get(String(sessionId || ""));
