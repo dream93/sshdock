@@ -127,7 +127,9 @@ const messages = {
     overwriteConfirm: "{name} already exists in the chosen folder. Overwrite?",
     confirmDelete: "Delete {name}?",
     deleteFailed: "Delete failed: {message}",
-    mkdirFailed: "Create folder failed: {message}"
+    mkdirFailed: "Create folder failed: {message}",
+    confirmCloseTask: "A task is still running in this terminal. Close anyway?",
+    confirmCloseGroupTask: "A task is still running in this group. Close anyway?"
   },
   "zh-CN": {
     brandSubtitle: "可视化 SSH 客户端",
@@ -228,7 +230,9 @@ const messages = {
     overwriteConfirm: "目标目录已存在 {name}，是否覆盖？",
     confirmDelete: "确认删除 {name}？",
     deleteFailed: "删除失败：{message}",
-    mkdirFailed: "新建文件夹失败：{message}"
+    mkdirFailed: "新建文件夹失败：{message}",
+    confirmCloseTask: "该终端仍有任务在运行，确定关闭吗？",
+    confirmCloseGroupTask: "该终端组仍有任务在运行，确定关闭吗？"
   }
 };
 
@@ -948,6 +952,8 @@ async function connect(connectionOverride) {
 async function disconnect() {
   if (!activeSessionId) return;
   const sessionId = activeSessionId;
+  // 关闭前确认：该会话仍有任务在运行时弹确认框
+  if (await api.hasActiveTask(sessionId) && !window.confirm(t("confirmCloseTask"))) return;
   await api.disconnect(sessionId);
   removeTerminalSession(sessionId);
 }
@@ -1105,6 +1111,9 @@ async function closeTerminalGroup(groupId) {
   const ids = [...terminalSessions.values()]
     .filter((s) => s.kind === "local" && s.groupId === groupId)
     .map((s) => s.id);
+  // 关闭前确认：组内任一会话仍有任务在运行时弹确认框
+  const busy = await Promise.all(ids.map((id) => api.hasActiveTask(id)));
+  if (busy.some(Boolean) && !window.confirm(t("confirmCloseGroupTask"))) return;
   for (const id of ids) {
     await api.disconnect(id);
     removeTerminalSession(id);
