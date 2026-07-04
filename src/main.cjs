@@ -210,6 +210,9 @@ function createWindow() {
     }
   });
 
+  // Windows 上任务栏闪烁不会自动停止，窗口重新获得焦点时手动停掉。
+  mainWindow.on("focus", () => mainWindow.flashFrame(false));
+
   mainWindow.loadFile(path.join(__dirname, "renderer", "index.html"));
 }
 
@@ -441,6 +444,23 @@ ipcMain.handle("terminal:open-window", (_event, payload) => {
 
 // 渲染端在关闭单个会话 / 终端组前查询是否有任务在运行
 ipcMain.handle("terminal:has-active-task", (_event, sessionId) => sessionHasActiveTask(sessionId));
+
+// 终端响铃且应用在后台时，让 Dock 图标跳动（macOS）/ 任务栏闪烁（Windows）提醒用户。
+ipcMain.on("app:request-attention", () => {
+  if (process.platform === "darwin") {
+    app.dock?.bounce("informational");
+    return;
+  }
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isFocused()) win.flashFrame(true);
+  }
+});
+
+// Dock 角标（macOS）/ 任务栏图标计数：显示有多少个终端在等待用户处理。
+ipcMain.on("app:set-badge", (_event, count) => {
+  const n = Number(count) || 0;
+  app.setBadgeCount(Math.max(0, n));
+});
 
 ipcMain.handle("terminal:snapshot", (_event, sessionId) => {
   const session = sessions.get(String(sessionId || ""));
