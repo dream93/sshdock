@@ -72,6 +72,7 @@ const messages = {
     createTerminalToStart: "Create one to start.",
     shellCount: "{count} shells",
     newTabSameDir: "New tab (same directory)",
+    bellAlert: "This terminal needs your attention",
     closeGroup: "Close",
     idle: "Idle",
     ready: "SSHDock ready.",
@@ -175,6 +176,7 @@ const messages = {
     createTerminalToStart: "新建一个终端开始使用。",
     shellCount: "{count} 个终端",
     newTabSameDir: "新建标签（同目录）",
+    bellAlert: "该终端有新的提示",
     closeGroup: "关闭",
     idle: "空闲",
     ready: "SSHDock 已就绪。",
@@ -500,6 +502,7 @@ function createTerminalSession(sessionId, connection, kind = "ssh", groupId = ""
     statusValues: {},
     stats: null,
     detached: false,
+    alert: false,
     pane: pane.pane,
     terminal: pane.terminal,
     fitAddon: pane.fitAddon
@@ -509,8 +512,41 @@ function createTerminalSession(sessionId, connection, kind = "ssh", groupId = ""
     api.sendInput({ sessionId, data });
   });
 
+  // 终端响铃（\x07）：程序请求用户注意时（如 Claude 等待确认）会输出响铃字符。
+  // 非当前焦点会话响铃时，在标签/侧栏打上提示点，并在应用处于后台时让 Dock 图标跳动。
+  session.terminal.onBell(() => markSessionAlert(sessionId));
+
   terminalSessions.set(sessionId, session);
   return session;
+}
+
+// 标记某会话有待处理的响铃提示。若用户此刻正看着该会话则无需提示。
+function markSessionAlert(sessionId) {
+  const session = terminalSessions.get(sessionId);
+  if (!session) return;
+  const focusedHere = document.hasFocus();
+  if (sessionId === activeSessionId && focusedHere) return;
+  // 应用在后台时始终请求系统层面的注意（Dock 跳动 / 任务栏闪烁），即使重复响铃。
+  if (!focusedHere) api.requestAttention?.();
+  if (session.alert) return;
+  session.alert = true;
+  renderSessionTabs();
+  renderSidebar();
+  updateAlertBadge();
+}
+
+// 清除某会话的响铃提示，返回是否发生了变化。
+function clearSessionAlert(sessionId) {
+  const session = terminalSessions.get(sessionId);
+  if (!session || !session.alert) return false;
+  session.alert = false;
+  return true;
+}
+
+// 同步 Dock 角标为待处理提示的终端数量。
+function updateAlertBadge() {
+  const count = [...terminalSessions.values()].filter((s) => s.alert).length;
+  api.setBadgeCount?.(count);
 }
 
 // 当前活动会话所属的栏目（本地组或 SSH 连接）内的兄弟会话
@@ -541,7 +577,16 @@ function renderSessionTabs() {
     const tab = document.createElement("button");
     tab.type = "button";
     tab.className = `session-tab ${session.id === activeSessionId ? "active" : ""}`;
-    tab.textContent = isLocalGroup ? String(index + 1) : session.title;
+    const label = document.createElement("span");
+    label.className = "session-tab-label";
+    label.textContent = isLocalGroup ? String(index + 1) : session.title;
+    tab.appendChild(label);
+    if (session.alert) {
+      const dot = document.createElement("span");
+      dot.className = "alert-dot";
+      dot.title = t("bellAlert");
+      tab.appendChild(dot);
+    }
     tab.addEventListener("click", () => selectTerminalSession(session.id));
     tabs.appendChild(tab);
   });
@@ -577,6 +622,7 @@ function selectTerminalSession(sessionId) {
   }
 
   activeSessionId = session.id;
+  if (clearSessionAlert(session.id)) updateAlertBadge();
   let group = null;
   if (session.kind === "local") {
     activeGroupId = session.groupId;
@@ -612,7 +658,9 @@ function removeTerminalSession(sessionId) {
   if (!session) return;
   const groupId = session.groupId;
   const groupSiblings = siblingSessions(session).filter((s) => s.id !== sessionId);
+  const hadAlert = session.alert;
   terminalSessions.delete(sessionId);
+  if (hadAlert) updateAlertBadge();
   sessionRemotePath.delete(sessionId);
   uploadProgress.clear();
   downloadProgress.clear();
@@ -677,7 +725,9 @@ function renderTerminalGroups() {
   }
 
   for (const group of terminalGroups.values()) {
-    const count = [...terminalSessions.values()].filter((s) => s.kind === "local" && s.groupId === group.id).length;
+    const groupSessions = [...terminalSessions.values()].filter((s) => s.kind === "local" && s.groupId === group.id);
+    const count = groupSessions.length;
+    const hasAlert = groupSessions.some((s) => s.alert);
     const item = document.createElement("div");
     item.className = "connection-row";
 
@@ -696,6 +746,13 @@ function renderTerminalGroups() {
       else activateGroup(group.id);
     });
     item.appendChild(button);
+
+    if (hasAlert) {
+      const dot = document.createElement("span");
+      dot.className = "alert-dot item-alert-dot";
+      dot.title = t("bellAlert");
+      item.appendChild(dot);
+    }
 
     const close = document.createElement("button");
     close.type = "button";
@@ -725,6 +782,7 @@ function renderList() {
   }
 
   for (const connection of connections) {
+    const hasAlert = [...terminalSessions.values()].some((s) => s.kind !== "local" && s.connectionId === connection.id && s.alert);
     const item = document.createElement("div");
     item.className = "connection-row";
 
@@ -759,6 +817,13 @@ function renderList() {
       await connect();
     });
     item.appendChild(button);
+
+    if (hasAlert) {
+      const dot = document.createElement("span");
+      dot.className = "alert-dot item-alert-dot";
+      dot.title = t("bellAlert");
+      item.appendChild(dot);
+    }
 
     if (activeConnectionMenuId === connection.id) {
       const menu = document.createElement("div");
@@ -1688,6 +1753,15 @@ restoreTerminalGroups().catch(() => {});
 setInterval(() => {
   for (const groupId of terminalGroups.keys()) updateGroupTitleFromCwd(groupId);
 }, 2000);
+
+// 应用重新获得焦点时，清除当前会话的响铃提示（用户已回到该终端）
+window.addEventListener("focus", () => {
+  if (clearSessionAlert(activeSessionId)) {
+    renderSessionTabs();
+    renderSidebar();
+    updateAlertBadge();
+  }
+});
 
 // 关闭窗口前补记一次当前标签，尽量减少轮询间隔造成的目录滞后
 window.addEventListener("beforeunload", () => {
