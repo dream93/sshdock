@@ -32,10 +32,25 @@
     "directories": {
       "buildResources": "build"
     },
+    "afterPack": "scripts/after-pack.cjs",
+    "compression": "maximum",
     "files": [
       "src/**/*",
       "node_modules/**/*",
-      "package.json"
+      "package.json",
+      "!**/*.map",
+      "!**/*.ts",
+      "!**/*.md",
+      "!**/{test,tests,__tests__,example,examples,doc,docs,demo}/**",
+      "!**/*.{o,obj,a,pdb}",
+      "!node_modules/@xterm/*/src/**",
+      "!node_modules/@xterm/*/typings/**",
+      "!node_modules/node-pty/{deps,third_party,src,scripts}/**",
+      "!node_modules/node-pty/**/*.test.js",
+      "!node_modules/cpu-features/deps/**",
+      "!node_modules/cpu-features/build/Release/{obj.target,.deps}/**",
+      "!node_modules/cpu-features/build/deps/**",
+      "!node_modules/buildcheck/deps/**"
     ],
     "asar": true,
     "asarUnpack": [
@@ -46,7 +61,10 @@
       "target": [
         "pkg"
       ],
-      "category": "public.app-category.developer-tools"
+      "category": "public.app-category.developer-tools",
+      "files": [
+        "!node_modules/node-pty/prebuilds/win32-*/**"
+      ]
     },
     "pkg": {
       "installLocation": "/Applications"
@@ -56,6 +74,9 @@
       "target": [
         "nsis",
         "portable"
+      ],
+      "files": [
+        "!node_modules/node-pty/prebuilds/darwin-*/**"
       ]
     },
     "nsis": {

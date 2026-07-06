@@ -4,12 +4,19 @@ const fs = require("fs");
 const os = require("os");
 const crypto = require("crypto");
 const { execFile, execFileSync } = require("child_process");
-const { Client } = require("ssh2");
 
+// node-pty / ssh2 都是较重的原生依赖，延迟到首次真正建立终端 / SSH 连接时再加载，
+// 缩短冷启动（仅打开本地终端时完全不加载 ssh2 及其原生 cpu-features 依赖）。
 let pty = null;
 function getPty() {
   if (!pty) pty = require("node-pty");
   return pty;
+}
+
+let SSHClient = null;
+function getSSHClient() {
+  if (!SSHClient) SSHClient = require("ssh2").Client;
+  return SSHClient;
 }
 
 // 选择本机默认 shell 及参数
@@ -478,7 +485,7 @@ ipcMain.handle("ssh:connect", async (_event, payload) => {
   // （远端 bash 在第 N 列折行、xterm 按真实宽度渲染 → 长命令/行内编辑光标错位、重影）。
   const initialCols = Number(payload.cols) || 100;
   const initialRows = Number(payload.rows) || 30;
-  const client = new Client();
+  const client = new (getSSHClient())();
 
   const connectConfig = {
     host: connection.host,
