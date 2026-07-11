@@ -61,10 +61,7 @@
       "target": [
         "pkg"
       ],
-      "category": "public.app-category.developer-tools",
-      "files": [
-        "!node_modules/node-pty/prebuilds/win32-*/**"
-      ]
+      "category": "public.app-category.developer-tools"
     },
     "pkg": {
       "installLocation": "/Applications"
@@ -74,9 +71,6 @@
       "target": [
         "nsis",
         "portable"
-      ],
-      "files": [
-        "!node_modules/node-pty/prebuilds/darwin-*/**"
       ]
     },
     "nsis": {
