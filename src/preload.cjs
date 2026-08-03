@@ -29,6 +29,7 @@ contextBridge.exposeInMainWorld("sshDock", {
   openTerminalWindow: (payload) => ipcRenderer.invoke("terminal:open-window", payload),
   terminalSnapshot: (sessionId) => ipcRenderer.invoke("terminal:snapshot", sessionId),
   hasActiveTask: (sessionId) => ipcRenderer.invoke("terminal:has-active-task", sessionId),
+  syncTerminalTitle: (payload) => ipcRenderer.send("terminal:sync-title", payload),
   requestAttention: () => ipcRenderer.send("app:request-attention"),
   setBadgeCount: (count) => ipcRenderer.send("app:set-badge", count),
   onData: (callback) => ipcRenderer.on("ssh:data", (_event, payload) => callback(payload)),
