@@ -5,10 +5,12 @@ const terminalBehavior = window.SSHDockTerminalBehavior;
 const systemThemeQuery = window.matchMedia("(prefers-color-scheme: light)");
 const THEME_STORAGE_KEY = "sshdock.theme";
 const LANGUAGE_STORAGE_KEY = "sshdock.language";
+const LINK_OPEN_MODE_STORAGE_KEY = "sshdock.linkOpenMode";
 const $ = (id) => document.getElementById(id);
 
 let themeMode = localStorage.getItem(THEME_STORAGE_KEY) || "system";
 let languageMode = localStorage.getItem(LANGUAGE_STORAGE_KEY) || "system";
+let linkOpenMode = localStorage.getItem(LINK_OPEN_MODE_STORAGE_KEY) === "internal" ? "internal" : "external";
 let terminal;
 let idleTerminal;
 let idleFitAddon;
@@ -42,6 +44,9 @@ const messages = {
     languageSystem: "System",
     languageEnglish: "English",
     languageChinese: "Simplified Chinese",
+    linkOpenMode: "Open links",
+    linkOpenExternal: "System browser",
+    linkOpenInternal: "In-app browser",
     connection: "Connection",
     passwordNote: "Passwords are saved locally for future connections.",
     delete: "Delete",
@@ -146,6 +151,9 @@ const messages = {
     languageSystem: "跟随系统",
     languageEnglish: "English",
     languageChinese: "简体中文",
+    linkOpenMode: "链接打开方式",
+    linkOpenExternal: "系统默认浏览器",
+    linkOpenInternal: "应用内浏览器",
     connection: "连接",
     passwordNote: "密码会保存到本机，用于后续连接。",
     delete: "删除",
@@ -323,8 +331,15 @@ function applyTheme(mode) {
   }
 }
 
+function applyLinkOpenMode(mode) {
+  linkOpenMode = mode === "internal" ? "internal" : "external";
+  localStorage.setItem(LINK_OPEN_MODE_STORAGE_KEY, linkOpenMode);
+  if ($("linkOpenMode")) $("linkOpenMode").value = linkOpenMode;
+}
+
 applyTheme(themeMode);
 applyLanguage(languageMode);
+applyLinkOpenMode(linkOpenMode);
 
 function terminalOptions() {
   return {
@@ -333,6 +348,11 @@ function terminalOptions() {
     scrollback: 10000,
     fontFamily: 'Menlo, Consolas, "Liberation Mono", monospace',
     fontSize: 13,
+    linkHandler: {
+      activate: (_event, url) => {
+        api.openLink({ url, mode: linkOpenMode }).catch((error) => console.error("打开链接失败：", error));
+      }
+    },
     theme: terminalTheme()
   };
 }
@@ -1384,6 +1404,7 @@ $("segTerminals").addEventListener("click", () => {
 $("settingsButton").addEventListener("click", showSettings);
 $("themeMode").addEventListener("change", (event) => applyTheme(event.target.value));
 $("languageMode").addEventListener("change", (event) => applyLanguage(event.target.value));
+$("linkOpenMode").addEventListener("change", (event) => applyLinkOpenMode(event.target.value));
 $("chooseKey").addEventListener("click", async () => {
   const keyPath = await api.chooseKeyPath();
   if (keyPath) $("keyPath").value = keyPath;

@@ -1,9 +1,10 @@
-const { app, BrowserWindow, dialog, ipcMain, Menu, safeStorage, shell } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, Menu, safeStorage, shell, WebContentsView } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
 const crypto = require("crypto");
 const { execFile, execFileSync } = require("child_process");
+const { normalizeExternalHttpUrl, normalizeLinkOpenMode } = require("./external-link.cjs");
 
 // node-pty / ssh2 都是较重的原生依赖，延迟到首次真正建立终端 / SSH 连接时再加载，
 // 缩短冷启动（仅打开本地终端时完全不加载 ssh2 及其原生 cpu-features 依赖）。
@@ -79,7 +80,9 @@ function confirmCloseWithTask(parentWindow, message) {
 let mainWindow;
 const sessions = new Map();
 const terminalWindows = new Map();
+const inAppBrowserWindows = new Map();
 const MAX_SESSION_HISTORY = 200000;
+const BROWSER_TOOLBAR_HEIGHT = 52;
 
 function posixJoin(...parts) {
   return parts
@@ -320,6 +323,129 @@ function createTerminalWindow(sessionId, title, kind = "ssh") {
   return terminalWindow;
 }
 
+function browserEntryForSender(sender) {
+  const entry = inAppBrowserWindows.get(sender.id);
+  if (!entry || entry.window.isDestroyed() || entry.view.webContents.isDestroyed()) return null;
+  return entry;
+}
+
+function layoutInAppBrowser(entry) {
+  const { width, height } = entry.window.getContentBounds();
+  entry.view.setBounds({
+    x: 0,
+    y: BROWSER_TOOLBAR_HEIGHT,
+    width,
+    height: Math.max(0, height - BROWSER_TOOLBAR_HEIGHT)
+  });
+}
+
+function sendInAppBrowserState(entry, values = {}) {
+  const page = entry.view.webContents;
+  const toolbar = entry.window.webContents;
+  if (page.isDestroyed() || toolbar.isDestroyed()) return;
+
+  const currentUrl = normalizeExternalHttpUrl(page.getURL()) || entry.url;
+  if (currentUrl) entry.url = currentUrl;
+  const title = page.getTitle() || new URL(entry.url).hostname;
+  entry.window.setTitle(`${title} - SSHDock`);
+  toolbar.send("browser:state", {
+    url: entry.url,
+    title,
+    canGoBack: page.canGoBack(),
+    canGoForward: page.canGoForward(),
+    loading: page.isLoading(),
+    error: "",
+    ...values
+  });
+}
+
+function navigateInAppBrowser(entry, value) {
+  const url = normalizeExternalHttpUrl(value);
+  if (!url || entry.view.webContents.isDestroyed()) return;
+  entry.url = url;
+  entry.view.webContents.loadURL(url).catch((error) => {
+    sendInAppBrowserState(entry, { loading: false, error: error.message });
+  });
+}
+
+function createInAppBrowser(value) {
+  const url = normalizeExternalHttpUrl(value);
+  if (!url) throw new Error("仅支持在应用内打开 HTTP/HTTPS 链接。");
+
+  const browserWindow = new BrowserWindow({
+    width: 1080,
+    height: 760,
+    minWidth: 640,
+    minHeight: 420,
+    title: "SSHDock Browser",
+    backgroundColor: "#11151c",
+    autoHideMenuBar: true,
+    webPreferences: {
+      preload: path.join(__dirname, "preload.cjs"),
+      contextIsolation: true,
+      nodeIntegration: false
+    }
+  });
+  const pageView = new WebContentsView({
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      partition: "persist:sshdock-browser"
+    }
+  });
+  const entry = { window: browserWindow, view: pageView, url };
+  const page = pageView.webContents;
+  const toolbarId = browserWindow.webContents.id;
+
+  inAppBrowserWindows.set(toolbarId, entry);
+  browserWindow.contentView.addChildView(pageView);
+  pageView.setBackgroundColor("#ffffff");
+  layoutInAppBrowser(entry);
+  page.session.setPermissionCheckHandler(() => false);
+  page.session.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
+
+  // 网页弹出的新窗口仍留在当前应用内浏览视图，避免产生无工具栏的 Electron 窗口。
+  page.setWindowOpenHandler(({ url: targetUrl }) => {
+    if (normalizeExternalHttpUrl(targetUrl)) {
+      setImmediate(() => navigateInAppBrowser(entry, targetUrl));
+    }
+    return { action: "deny" };
+  });
+  const blockUnsafeNavigation = (event, legacyUrl) => {
+    const targetUrl = event.url || legacyUrl;
+    if (!normalizeExternalHttpUrl(targetUrl)) event.preventDefault();
+  };
+  page.on("will-navigate", blockUnsafeNavigation);
+  page.on("will-redirect", blockUnsafeNavigation);
+  page.on("did-start-loading", () => sendInAppBrowserState(entry));
+  page.on("did-stop-loading", () => sendInAppBrowserState(entry));
+  page.on("did-navigate", (_event, targetUrl) => {
+    entry.url = normalizeExternalHttpUrl(targetUrl) || entry.url;
+    sendInAppBrowserState(entry);
+  });
+  page.on("did-navigate-in-page", (_event, targetUrl) => {
+    entry.url = normalizeExternalHttpUrl(targetUrl) || entry.url;
+    sendInAppBrowserState(entry);
+  });
+  page.on("page-title-updated", () => sendInAppBrowserState(entry));
+  page.on("did-fail-load", (_event, errorCode, errorDescription, _validatedUrl, isMainFrame) => {
+    if (isMainFrame && errorCode !== -3) {
+      sendInAppBrowserState(entry, { loading: false, error: errorDescription });
+    }
+  });
+
+  browserWindow.on("resize", () => layoutInAppBrowser(entry));
+  browserWindow.webContents.on("did-finish-load", () => sendInAppBrowserState(entry));
+  browserWindow.on("closed", () => {
+    inAppBrowserWindows.delete(toolbarId);
+    if (!page.isDestroyed()) page.close();
+  });
+  browserWindow.loadFile(path.join(__dirname, "renderer", "browser-window.html"));
+  navigateInAppBrowser(entry, url);
+  return browserWindow;
+}
+
 app.whenReady().then(createWindow);
 
 app.on("window-all-closed", () => {
@@ -467,6 +593,36 @@ ipcMain.on("app:request-attention", () => {
 ipcMain.on("app:set-badge", (_event, count) => {
   const n = Number(count) || 0;
   app.setBadgeCount(Math.max(0, n));
+});
+
+// 终端超链接按设置交给系统浏览器或 SSHDock 应用内浏览器。
+ipcMain.handle("shell:open-link", async (_event, payload) => {
+  const url = normalizeExternalHttpUrl(payload?.url);
+  if (!url) throw new Error("仅支持打开 HTTP/HTTPS 链接。");
+  if (normalizeLinkOpenMode(payload?.mode) === "internal") {
+    createInAppBrowser(url);
+    return true;
+  }
+  await shell.openExternal(url);
+  return true;
+});
+
+ipcMain.on("browser:action", (event, action) => {
+  const entry = browserEntryForSender(event.sender);
+  if (!entry) return;
+  const page = entry.view.webContents;
+  if (action === "back" && page.canGoBack()) page.goBack();
+  else if (action === "forward" && page.canGoForward()) page.goForward();
+  else if (action === "reload") page.reload();
+  else if (action === "stop") page.stop();
+});
+
+ipcMain.handle("browser:open-external", async (event) => {
+  const entry = browserEntryForSender(event.sender);
+  if (!entry) throw new Error("应用内浏览器窗口已关闭。");
+  const url = normalizeExternalHttpUrl(entry.view.webContents.getURL()) || entry.url;
+  await shell.openExternal(url);
+  return true;
 });
 
 ipcMain.handle("terminal:snapshot", (_event, sessionId) => {
