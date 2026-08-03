@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld("sshDock", {
   chooseDownloadFolder: (payload) => ipcRenderer.invoke("dialog:choose-folder", payload),
   downloadRemoteTo: (payload) => ipcRenderer.invoke("ssh:download-to", payload),
   revealInFolder: (localPath) => ipcRenderer.send("shell:reveal-item", localPath),
+  openExternal: (url) => ipcRenderer.invoke("shell:open-external", url),
   makeRemoteDir: (payload) => ipcRenderer.invoke("ssh:mkdir", payload),
   removeRemote: (payload) => ipcRenderer.invoke("ssh:rm", payload),
   createLocalTerminal: (payload) => ipcRenderer.invoke("localterm:create", payload),

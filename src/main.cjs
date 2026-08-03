@@ -4,6 +4,7 @@ const fs = require("fs");
 const os = require("os");
 const crypto = require("crypto");
 const { execFile, execFileSync } = require("child_process");
+const { normalizeExternalHttpUrl } = require("./external-link.cjs");
 
 // node-pty / ssh2 都是较重的原生依赖，延迟到首次真正建立终端 / SSH 连接时再加载，
 // 缩短冷启动（仅打开本地终端时完全不加载 ssh2 及其原生 cpu-features 依赖）。
@@ -467,6 +468,14 @@ ipcMain.on("app:request-attention", () => {
 ipcMain.on("app:set-badge", (_event, count) => {
   const n = Number(count) || 0;
   app.setBadgeCount(Math.max(0, n));
+});
+
+// 终端中的超链接交给系统默认浏览器，避免 Electron 在应用内创建网页窗口。
+ipcMain.handle("shell:open-external", async (_event, value) => {
+  const url = normalizeExternalHttpUrl(value);
+  if (!url) throw new Error("仅支持在默认浏览器中打开 HTTP/HTTPS 链接。");
+  await shell.openExternal(url);
+  return true;
 });
 
 ipcMain.handle("terminal:snapshot", (_event, sessionId) => {

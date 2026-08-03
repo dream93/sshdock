@@ -34,6 +34,11 @@ const terminal = new TerminalCtor({
   scrollback: 10000,
   fontFamily: 'Menlo, Consolas, "Liberation Mono", monospace',
   fontSize: 13,
+  linkHandler: {
+    activate: (_event, url) => {
+      api.openExternal(url).catch((error) => console.error("默认浏览器打开链接失败：", error));
+    }
+  },
   theme: terminalTheme()
 });
 const fitAddon = new FitAddonCtor();
