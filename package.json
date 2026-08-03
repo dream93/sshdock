@@ -7,6 +7,7 @@
   "license": "MIT",
   "private": true,
   "scripts": {
+    "test": "node --test test/*.test.cjs",
     "postinstall": "node scripts/fix-pty-perms.cjs",
     "start": "electron .",
     "dist": "electron-builder",

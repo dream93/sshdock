@@ -1,6 +1,7 @@
 const api = window.sshDock;
 const TerminalCtor = window.Terminal;
 const FitAddonCtor = window.FitAddon.FitAddon;
+const terminalBehavior = window.SSHDockTerminalBehavior;
 const systemThemeQuery = window.matchMedia("(prefers-color-scheme: light)");
 const THEME_STORAGE_KEY = "sshdock.theme";
 const LANGUAGE_STORAGE_KEY = "sshdock.language";
@@ -434,6 +435,7 @@ function createTerminalIn(container) {
   enableCanvasRenderer(instance);
   useCellSelectionAnchor(instance, container);
   enableImePunctuation(instance);
+  terminalBehavior.enableVisualLineCopy(instance, api.platform === "win32" ? "\r\n" : "\n");
   return { terminal: instance, fitAddon };
 }
 
@@ -1676,21 +1678,9 @@ $("terminal").addEventListener("drop", async (event) => {
   }
 });
 
-// 写入终端数据并保持「跟随底部」：
-// PTY 大批量输出时，xterm 的吸底与 DOM 滚动区同步存在竞态，偶发停在顶部且无法滚到底；
-// 写入前记录是否在底部，待本次数据渲染完成后再补一次 scrollToBottom 纠正。
-// 若用户已向上滚动阅读历史，则保留其阅读位置，不强制拽到底部。
-function writeFollowingBottom(term, data) {
-  const buffer = term.buffer.active;
-  const atBottom = buffer.viewportY >= buffer.baseY;
-  term.write(data, () => {
-    if (atBottom) term.scrollToBottom();
-  });
-}
-
 api.onData(({ sessionId, data }) => {
   const session = terminalSessions.get(sessionId);
-  if (session) writeFollowingBottom(session.terminal, data);
+  if (session) terminalBehavior.writeFollowingBottom(session.terminal, data);
 });
 
 api.onStats((payload) => {
