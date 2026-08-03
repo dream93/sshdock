@@ -1117,7 +1117,11 @@ async function updateGroupTitleFromCwd(groupId) {
   const name = lastPathSegment(cwd);
   if (name && name !== group.title) {
     group.title = name;
-    first.title = name;
+    for (const session of terminalSessions.values()) {
+      if (session.kind !== "local" || session.groupId !== groupId) continue;
+      session.title = name;
+      api.syncTerminalTitle({ sessionId: session.id, title: name });
+    }
     if (activeSessionId === first.id || terminalSessions.get(activeSessionId)?.groupId === groupId) {
       $("terminalTitle").textContent = name;
     }

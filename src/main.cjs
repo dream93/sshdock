@@ -5,6 +5,7 @@ const os = require("os");
 const crypto = require("crypto");
 const { execFile, execFileSync } = require("child_process");
 const { normalizeExternalHttpUrl, normalizeLinkOpenMode } = require("./external-link.cjs");
+const { formatActiveTaskDetail } = require("./close-confirmation.cjs");
 
 // node-pty / ssh2 都是较重的原生依赖，延迟到首次真正建立终端 / SSH 连接时再加载，
 // 缩短冷启动（仅打开本地终端时完全不加载 ssh2 及其原生 cpu-features 依赖）。
@@ -55,15 +56,16 @@ function sessionHasActiveTask(sessionId) {
   return true;
 }
 
-function anySessionHasActiveTask() {
-  for (const id of sessions.keys()) {
-    if (sessionHasActiveTask(id)) return true;
+function activeTaskSessions() {
+  const activeSessions = [];
+  for (const [id, session] of sessions) {
+    if (sessionHasActiveTask(id)) activeSessions.push(session);
   }
-  return false;
+  return activeSessions;
 }
 
 // 关闭前的同步确认框：返回 true 表示用户选择「仍然关闭」
-function confirmCloseWithTask(parentWindow, message) {
+function confirmCloseWithTask(parentWindow, message, windowTitles = []) {
   const result = dialog.showMessageBoxSync(parentWindow, {
     type: "warning",
     buttons: ["仍然关闭", "取消"],
@@ -72,7 +74,7 @@ function confirmCloseWithTask(parentWindow, message) {
     noLink: true,
     title: "SSHDock",
     message,
-    detail: "关闭后正在运行的任务会被中断。"
+    detail: formatActiveTaskDetail(windowTitles)
   });
   return result === 0;
 }
@@ -212,8 +214,13 @@ function createWindow() {
   let allowClose = false;
   mainWindow.on("close", (event) => {
     if (allowClose) return;
-    if (!anySessionHasActiveTask()) return;
-    if (confirmCloseWithTask(mainWindow, "仍有终端任务在运行，确定关闭吗？")) {
+    const activeSessions = activeTaskSessions();
+    if (activeSessions.length === 0) return;
+    if (confirmCloseWithTask(
+      mainWindow,
+      "仍有终端任务在运行，确定关闭吗？",
+      activeSessions.map((session) => session.title)
+    )) {
       allowClose = true;
     } else {
       event.preventDefault();
@@ -295,7 +302,12 @@ function createTerminalWindow(sessionId, title, kind = "ssh") {
   terminalWindow.on("close", (event) => {
     if (allowWindowClose) return;
     if (!sessionHasActiveTask(sessionId)) return;
-    if (confirmCloseWithTask(terminalWindow, "该终端仍有任务在运行，确定关闭窗口吗？")) {
+    const session = sessions.get(sessionId);
+    if (confirmCloseWithTask(
+      terminalWindow,
+      "该终端仍有任务在运行，确定关闭窗口吗？",
+      [session?.title]
+    )) {
       allowWindowClose = true;
     } else {
       event.preventDefault();
@@ -577,6 +589,13 @@ ipcMain.handle("terminal:open-window", (_event, payload) => {
 
 // 渲染端在关闭单个会话 / 终端组前查询是否有任务在运行
 ipcMain.handle("terminal:has-active-task", (_event, sessionId) => sessionHasActiveTask(sessionId));
+
+// 本地终端标题会随当前目录变化，同步到主进程供关闭提示使用。
+ipcMain.on("terminal:sync-title", (_event, payload) => {
+  const session = sessions.get(String(payload?.sessionId || ""));
+  const title = String(payload?.title || "").trim();
+  if (session && title) session.title = title;
+});
 
 // 终端响铃且应用在后台时，让 Dock 图标跳动（macOS）/ 任务栏闪烁（Windows）提醒用户。
 ipcMain.on("app:request-attention", () => {
