@@ -10,4 +10,8 @@ function normalizeExternalHttpUrl(value) {
   }
 }
 
-module.exports = { normalizeExternalHttpUrl };
+function normalizeLinkOpenMode(value) {
+  return value === "internal" ? "internal" : "external";
+}
+
+module.exports = { normalizeExternalHttpUrl, normalizeLinkOpenMode };

@@ -55,6 +55,76 @@ body {
   overflow: hidden;
 }
 
+.browser-window-body {
+  min-width: 0;
+  background: var(--app-bg);
+}
+
+.browser-toolbar {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  height: 52px;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-bg);
+}
+
+.browser-nav-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.browser-toolbar .browser-icon-button {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border-radius: 6px;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.browser-icon-button:hover:not(:disabled) {
+  background: var(--control-hover);
+}
+
+.browser-icon-button:disabled {
+  color: var(--muted);
+  cursor: default;
+  opacity: 0.45;
+}
+
+.browser-location {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+
+.browser-page-title {
+  overflow: hidden;
+  font-size: 12px;
+  line-height: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.browser-page-url {
+  width: 100%;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 20px;
+  text-overflow: ellipsis;
+}
+
+.browser-page-url:focus {
+  border: 0;
+}
+
 button,
 input,
 select {

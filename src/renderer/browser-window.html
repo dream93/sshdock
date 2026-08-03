@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self'" />
+    <title>SSHDock Browser</title>
+    <script>
+      const savedTheme = localStorage.getItem("sshdock.theme") || "system";
+      const systemTheme = matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+      document.documentElement.dataset.theme = savedTheme === "system" ? systemTheme : savedTheme;
+    </script>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body class="browser-window-body">
+    <header class="browser-toolbar">
+      <nav class="browser-nav-actions" aria-label="Browser navigation">
+        <button id="browserBack" type="button" class="ghost browser-icon-button" aria-label="Back" disabled>←</button>
+        <button id="browserForward" type="button" class="ghost browser-icon-button" aria-label="Forward" disabled>→</button>
+        <button id="browserReload" type="button" class="ghost browser-icon-button" aria-label="Reload">↻</button>
+      </nav>
+      <div class="browser-location">
+        <strong id="browserTitle" class="browser-page-title">SSHDock Browser</strong>
+        <input id="browserUrl" class="browser-page-url" type="text" aria-label="Current URL" readonly />
+      </div>
+      <button id="browserOpenExternal" type="button" class="secondary browser-icon-button" aria-label="Open in system browser">↗</button>
+    </header>
+    <script src="./browser-window.js"></script>
+  </body>
+</html>

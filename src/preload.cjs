@@ -17,7 +17,9 @@ contextBridge.exposeInMainWorld("sshDock", {
   chooseDownloadFolder: (payload) => ipcRenderer.invoke("dialog:choose-folder", payload),
   downloadRemoteTo: (payload) => ipcRenderer.invoke("ssh:download-to", payload),
   revealInFolder: (localPath) => ipcRenderer.send("shell:reveal-item", localPath),
-  openExternal: (url) => ipcRenderer.invoke("shell:open-external", url),
+  openLink: (payload) => ipcRenderer.invoke("shell:open-link", payload),
+  browserAction: (action) => ipcRenderer.send("browser:action", action),
+  openCurrentBrowserExternal: () => ipcRenderer.invoke("browser:open-external"),
   makeRemoteDir: (payload) => ipcRenderer.invoke("ssh:mkdir", payload),
   removeRemote: (payload) => ipcRenderer.invoke("ssh:rm", payload),
   createLocalTerminal: (payload) => ipcRenderer.invoke("localterm:create", payload),
@@ -35,5 +37,6 @@ contextBridge.exposeInMainWorld("sshDock", {
   onDownloadProgress: (callback) => ipcRenderer.on("ssh:download-progress", (_event, payload) => callback(payload)),
   onClosed: (callback) => ipcRenderer.on("ssh:closed", (_event, payload) => callback(payload)),
   onError: (callback) => ipcRenderer.on("ssh:error", (_event, payload) => callback(payload)),
+  onBrowserState: (callback) => ipcRenderer.on("browser:state", (_event, payload) => callback(payload)),
   onTerminalWindowClosed: (callback) => ipcRenderer.on("terminal:window-closed", (_event, payload) => callback(payload))
 });

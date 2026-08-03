@@ -4,6 +4,7 @@ const FitAddonCtor = window.FitAddon.FitAddon;
 const terminalBehavior = window.SSHDockTerminalBehavior;
 const systemThemeQuery = window.matchMedia("(prefers-color-scheme: light)");
 const params = new URLSearchParams(window.location.search);
+const LINK_OPEN_MODE_STORAGE_KEY = "sshdock.linkOpenMode";
 const sessionId = params.get("sessionId") || "";
 const initialTitle = params.get("title") || "Terminal";
 const sessionKind = params.get("kind") || "ssh";
@@ -36,7 +37,8 @@ const terminal = new TerminalCtor({
   fontSize: 13,
   linkHandler: {
     activate: (_event, url) => {
-      api.openExternal(url).catch((error) => console.error("默认浏览器打开链接失败：", error));
+      const mode = localStorage.getItem(LINK_OPEN_MODE_STORAGE_KEY) === "internal" ? "internal" : "external";
+      api.openLink({ url, mode }).catch((error) => console.error("打开链接失败：", error));
     }
   },
   theme: terminalTheme()
