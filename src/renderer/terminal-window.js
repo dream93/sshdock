@@ -1,6 +1,7 @@
 const api = window.sshDock;
 const TerminalCtor = window.Terminal;
 const FitAddonCtor = window.FitAddon.FitAddon;
+const terminalBehavior = window.SSHDockTerminalBehavior;
 const systemThemeQuery = window.matchMedia("(prefers-color-scheme: light)");
 const params = new URLSearchParams(window.location.search);
 const sessionId = params.get("sessionId") || "";
@@ -117,6 +118,7 @@ document.title = `${initialTitle} - SSHDock`;
     };
   } catch {}
 })();
+terminalBehavior.enableVisualLineCopy(terminal, api.platform === "win32" ? "\r\n" : "\n");
 
 // 强制重新测量字符单元格尺寸：窗口处于后台/被遮挡时 xterm 会把单元格量成 0 并缓存，
 // 此时 fit() 因 cell.width===0 直接返回，恢复前台后沿用陈旧尺寸导致宽高都不对，
@@ -182,18 +184,8 @@ terminalEl.addEventListener("drop", (event) => {
   api.sendInput({ sessionId, data: paths.map(escape).join(" ") + " " });
 });
 
-// 写入并保持「跟随底部」：大批量输出时避免视口停在顶部而无法滚到底；
-// 若用户已向上滚动阅读历史，则保留其阅读位置。
-function writeFollowingBottom(data) {
-  const buffer = terminal.buffer.active;
-  const atBottom = buffer.viewportY >= buffer.baseY;
-  terminal.write(data, () => {
-    if (atBottom) terminal.scrollToBottom();
-  });
-}
-
 api.onData((payload) => {
-  if (payload.sessionId === sessionId) writeFollowingBottom(payload.data);
+  if (payload.sessionId === sessionId) terminalBehavior.writeFollowingBottom(terminal, payload.data);
 });
 
 api.onClosed((payload) => {
