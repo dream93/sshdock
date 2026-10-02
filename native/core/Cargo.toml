@@ -1,0 +1,25 @@
+[package]
+name = "sshdock-core"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+description = "SSHDock native session and terminal core"
+publish = false
+
+[lib]
+name = "sshdock_core"
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+alacritty_terminal = "0.26"
+base64 = "0.22"
+portable-pty = "0.9"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading"] }
