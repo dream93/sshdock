@@ -54,14 +54,16 @@ Windows 自包含产物还提供真实启动 smoke 模式：
 
 该模式创建真实 XAML 窗口、本地 PTY 和 Win2D 首帧，再等待 shell 输出测试标记；通过后写入 `ok: true` 的 JSON 报告、自动清理会话并退出 0。失败写入阶段及错误并退出 1，绘制/输出等待限制为 20 秒；CI 还应给整个进程设置超时，捕获应用初始化之前的故障。此模式跳过退出确认，仅用于自动验证，普通启动保留关闭保护。
 
-macOS 能还原依赖，并通过以下命令编译 C# / WinRT 源码；完整 Windows 发布仍需 Windows 的 `mt.exe` 和 `makepri.exe`，下面的编译检查不会生成可运行的 Windows 发布包：
+`App.xaml` 只负责合并官方 `XamlControlsResources`，窗口和终端继续由 C# 与 Win2D 创建。该应用定义同时启用 SDK 的 XAML 元数据和根目录 `resources.pri` 生成；自包含发布需要合并后的 PRI 才能加载控件主题，构建脚本会检查该文件存在。
+
+macOS 能还原依赖并运行上述非 UI 桥接测试。WinUI 应用的编译和发布需要 Windows，因为 `App.xaml` 的官方 XAML 编译器、`mt.exe` 和 `makepri.exe` 都是 Windows 工具。下面的源码编译检查也应在 Windows 上执行，它不会生成可运行的完整发布包：
 
 ```sh
 dotnet restore native/windows/SSHDock.Native/SSHDock.Native.csproj -r win-x64 -p:Platform=x64
-dotnet msbuild native/windows/SSHDock.Native/SSHDock.Native.csproj -t:Compile \
-  -p:Configuration=Release -p:RuntimeIdentifier=win-x64 \
+dotnet build native/windows/SSHDock.Native/SSHDock.Native.csproj --no-restore \
+  --configuration Release --runtime win-x64 \
   -p:Platform=x64 -p:WindowsAppSDKSelfContained=false \
-  -p:GenerateAppxPackageOnBuild=false -p:EnableMsixTooling=false
+  -p:GenerateAppxPackageOnBuild=false
 ```
 
 Windows 上仍需实际验证候选框位置、IME Enter/Escape 行为、125%/150%/200% 缩放、跨显示器移动、Vim/tmux、鼠标选择和独立窗口迁移。源码编译和 ABI 测试不等于这些交互已验收。阶段 1 不承诺终端无障碍文本模式、鼠标报告、超链接、终端图像或完整高级协议；这些能力需要下一阶段专门验收。

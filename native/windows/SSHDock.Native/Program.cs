@@ -18,7 +18,7 @@ internal static class Program
     }
 }
 
-internal sealed class App : Application
+public sealed partial class App : Application
 {
     private AppCoordinator? _coordinator;
     private MainWindow? _window;
@@ -29,7 +29,9 @@ internal sealed class App : Application
         var stage = "xaml-resources";
         try
         {
-            Resources.MergedDictionaries.Add(new Microsoft.UI.Xaml.Controls.XamlControlsResources());
+            // App.xaml activates the SDK's XAML metadata and merged resources.pri pipeline.
+            // Loading it here keeps resource failures inside the startup smoke report.
+            InitializeComponent();
             stage = "native-core";
             var core = await Task.Run(() => new Core.NativeCoreClient());
             _coordinator = new AppCoordinator(core, DispatcherQueue.GetForCurrentThread());
