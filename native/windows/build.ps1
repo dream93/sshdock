@@ -21,8 +21,8 @@ dotnet publish "$PSScriptRoot/SSHDock.Native/SSHDock.Native.csproj" `
     --configuration $Configuration --runtime "win-$Architecture" --self-contained true `
     -p:Platform=$platform -p:WindowsAppSDKSelfContained=true -o $outputDirectory
 if ($LASTEXITCODE -ne 0) { throw 'WinUI application build failed' }
-if (-not (Test-Path (Join-Path $outputDirectory 'resources.pri'))) {
-    throw 'WinUI application resources.pri was not published; the native XAML controls cannot load their theme resources'
+if (-not (Test-Path (Join-Path $outputDirectory 'SSHDock.Native.pri'))) {
+    throw 'WinUI application SSHDock.Native.pri was not published; the native XAML controls cannot load their theme resources'
 }
 Copy-Item "$nativeRoot/core/target/$rustTarget/$profile/sshdock_core.dll" $outputDirectory -Force
 

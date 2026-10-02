@@ -54,7 +54,7 @@ Windows 自包含产物还提供真实启动 smoke 模式：
 
 该模式创建真实 XAML 窗口、本地 PTY 和 Win2D 首帧，再等待 shell 输出测试标记；通过后写入 `ok: true` 的 JSON 报告、自动清理会话并退出 0。失败写入阶段及错误并退出 1，绘制/输出等待限制为 20 秒；CI 还应给整个进程设置超时，捕获应用初始化之前的故障。此模式跳过退出确认，仅用于自动验证，普通启动保留关闭保护。
 
-`App.xaml` 只负责合并官方 `XamlControlsResources`，窗口和终端继续由 C# 与 Win2D 创建。该应用定义同时启用 SDK 的 XAML 元数据和根目录 `resources.pri` 生成；自包含发布需要合并后的 PRI 才能加载控件主题，构建脚本会检查该文件存在。
+`App.xaml` 只负责合并官方 `XamlControlsResources`，窗口和终端继续由 C# 与 Win2D 创建。该应用定义生成 SDK 的 XAML 元数据与应用资源。当前非 MSIX 构建流程生成的合并资源索引为根目录的 `SSHDock.Native.pri`；项目通过 SDK 的 `ProjectPriFullPath` / `ProjectPriFileName` 显式纳入发布，补足上游 [WindowsAppSDK #6720](https://github.com/microsoft/WindowsAppSDK/issues/6720) 的缺项，构建脚本会检查该文件存在。
 
 macOS 能还原依赖并运行上述非 UI 桥接测试。WinUI 应用的编译和发布需要 Windows，因为 `App.xaml` 的官方 XAML 编译器、`mt.exe` 和 `makepri.exe` 都是 Windows 工具。下面的源码编译检查也应在 Windows 上执行，它不会生成可运行的完整发布包：
 

@@ -20,4 +20,19 @@
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.260921001" />
     <PackageReference Include="Microsoft.Graphics.Win2D" Version="1.4.0" />
   </ItemGroup>
+  <!-- The SDK's unpackaged MRT Core path generates the app PRI but omits it from publish.
+       Keep the SDK's filename and merge output; see microsoft/WindowsAppSDK#6720. -->
+  <Target Name="PublishUnpackagedProjectPri"
+          BeforeTargets="ComputeResolvedFilesToPublishList"
+          DependsOnTargets="_GenerateProjectPriFile"
+          Condition="'$(WindowsPackageType)' == 'None' and '$(CopyBuildOutputToPublishDirectory)' != 'false'">
+    <Error Condition="!Exists('$(ProjectPriFullPath)')"
+           Text="WinUI application PRI was not generated: $(ProjectPriFullPath)" />
+    <ItemGroup>
+      <ResolvedFileToPublish Include="$(ProjectPriFullPath)">
+        <RelativePath>$(ProjectPriFileName)</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
 </Project>
