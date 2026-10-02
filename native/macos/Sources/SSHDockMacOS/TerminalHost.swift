@@ -81,6 +81,29 @@ struct SessionHeader: View {
     }
 }
 
+struct InputQueueBanner: View {
+    @ObservedObject var queue: SessionInputQueue
+    var body: some View {
+        if queue.pauseReason != nil || queue.notice != nil {
+            VStack(alignment: .leading, spacing: 7) {
+                Text(queue.notice ?? queue.pauseReason ?? "")
+                HStack {
+                    if queue.pendingBytes > 0 {
+                        Text("\(ByteCountFormatter.string(fromByteCount: Int64(queue.pendingBytes), countStyle: .memory)) 待发送")
+                        Spacer()
+                        Button("重试发送", action: queue.retry)
+                        Button("取消待发送", action: queue.cancelPending)
+                            .help("取消待发送内容，已经提交的输入请求无法撤回")
+                    } else {
+                        Button("关闭提示", action: queue.dismissNotice)
+                    }
+                }
+            }.font(.caption).padding(10).frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.orange.opacity(0.15))
+        }
+    }
+}
+
 struct MainView: View {
     @ObservedObject var store: SessionStore
     var body: some View {
@@ -116,6 +139,7 @@ struct MainView: View {
             Divider()
             if let session = store.selected {
                 SessionHeader(session: session)
+                InputQueueBanner(queue: session.inputQueue)
                 Divider()
                 if session.detached {
                     VStack(spacing: 14) {
@@ -151,6 +175,7 @@ struct DetachedView: View {
                 Button("移回主窗口", action: returnToMain).padding(.trailing, 10)
             }
             Divider()
+            InputQueueBanner(queue: session.inputQueue)
             TerminalHost(session: session, presentation: .detached).frame(maxWidth: .infinity, maxHeight: .infinity)
         }.frame(minWidth: 400, maxWidth: .infinity, minHeight: 240, maxHeight: .infinity)
     }

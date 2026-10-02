@@ -15,6 +15,7 @@ final class TerminalSession: ObservableObject, Identifiable, @preconcurrency Ter
     enum State { case waiting, starting, running, closed, failed }
     let id = UUID()
     let terminal: TerminalView
+    let inputQueue = SessionInputQueue()
     @Published var title: String
     @Published var cwd: String
     @Published var state: State = .waiting
@@ -75,6 +76,8 @@ final class TerminalSession: ObservableObject, Identifiable, @preconcurrency Ter
 
     func scrolled(source: TerminalView, position: Double) {}
     func rangeChanged(source: TerminalView, startY: Int, endY: Int) {}
+    // This is the OSC 52 callback, whose SwiftTerm default is also a no-op.
+    // User selection copy(_: ) writes NSPasteboard directly in TerminalView.
     func clipboardCopy(source: TerminalView, content: Data) {}
     func requestOpenLink(source: TerminalView, link: String, params: [String: String]) {
         guard let url = URL(string: link), ["http", "https", "mailto"].contains(url.scheme?.lowercased() ?? "") else { return }
@@ -134,6 +137,7 @@ final class SessionStore: ObservableObject {
             let response = try JSONDecoder().decode(CreatedSession.self, from: data)
             session.coreID = response.sessionId
             session.cwd = response.cwd
+            configureInput(session)
             session.state = .running
             session.status = "运行中"
             session.lastSentSize = initialSize
@@ -148,8 +152,30 @@ final class SessionStore: ObservableObject {
     }
 
     func send(_ data: Data, to session: TerminalSession) {
-        guard let id = session.coreID else { return }
-        enqueue("sessions.input", ["sessionId": id, "data": data.base64EncodedString()])
+        guard !isStopping, session.coreID != nil, session.state == .running else { return }
+        session.inputQueue.enqueue(data)
+    }
+
+    private func configureInput(_ session: TerminalSession) {
+        session.inputQueue.sender = { [weak self, weak session] data, completion in
+            guard let self, !isStopping, let session, let id = session.coreID, session.state == .running else {
+                completion(.failure(CoreFailure(code: "session_closed", message: "会话已关闭")))
+                return
+            }
+            do {
+                let json = try coreRequestJSON("sessions.input", ["sessionId": id, "data": data.base64EncodedString()])
+                bridge.submit(json) { result in
+                    DispatchQueue.main.async {
+                        switch result {
+                        case .success: completion(.success(()))
+                        case .failure(let error): completion(.failure(error as? CoreFailure ?? CoreFailure(code: "INPUT_ERROR", message: error.localizedDescription)))
+                        }
+                    }
+                }
+            } catch {
+                completion(.failure(CoreFailure(code: "INVALID_REQUEST", message: error.localizedDescription)))
+            }
+        }
     }
 
     func resize(_ session: TerminalSession) {
@@ -171,6 +197,7 @@ final class SessionStore: ObservableObject {
             guard alert.runModal() == .alertFirstButtonReturn else { return }
         }
         session.state = .closed
+        session.inputQueue.shutdown()
         Task {
             if let id = session.coreID { await perform("sessions.close", ["sessionId": id]) }
             windowCoordinator?.closeDetached(session)
@@ -204,6 +231,7 @@ final class SessionStore: ObservableObject {
 
     func stop() {
         isStopping = true
+        for session in sessions { session.inputQueue.shutdown() }
         bridge.stop()
         pendingEvents.removeAll()
     }
@@ -245,6 +273,7 @@ final class SessionStore: ObservableObject {
                 if let encoded = event.data, let data = Data(base64Encoded: encoded) { session.terminal.feed(byteArray: Array(data)[...]) }
             case "closed":
                 session.state = .closed
+                session.inputQueue.shutdown()
                 session.status = "已退出（\(event.exitCode ?? 0)）"
                 objectWillChange.send()
             case "error": session.status = event.message ?? "会话出错"

@@ -18,6 +18,7 @@ internal sealed class MainWindow : Window
     private bool _allowClose;
     private bool _dialogOpen;
     public MainWindow? HomeWindow { get; }
+    public bool IsClosing => _closing || _allowClose;
 
     public IEnumerable<TerminalSession> Sessions => _items.Keys;
     private TerminalSession? SelectedSession => _items.FirstOrDefault(pair => ReferenceEquals(pair.Value.Tab, _tabs.SelectedItem)).Key;
@@ -47,8 +48,10 @@ internal sealed class MainWindow : Window
         returnButton.Click += (_, _) => { if (SelectedSession is { } session) _coordinator.MoveToOtherWindow(this, session); };
         var retryButton = new Button { Content = "重试输入" };
         retryButton.Click += async (_, _) => { if (SelectedSession is { } session) await session.SendAsync(""); };
+        var cancelInputButton = new Button { Content = "取消未发送输入" };
+        cancelInputButton.Click += (_, _) => SelectedSession?.CancelPendingInput();
         var toolbar = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(12, 10, 12, 10) };
-        foreach (var control in new FrameworkElement[] { newButton, _shell, detachButton, returnButton, retryButton, _font, _fontSize }) toolbar.Children.Add(control);
+        foreach (var control in new FrameworkElement[] { newButton, _shell, detachButton, returnButton, retryButton, cancelInputButton, _font, _fontSize }) toolbar.Children.Add(control);
 
         _tabs.AddTabButtonClick += async (_, _) => await NewTerminalAsync();
         _tabs.TabCloseRequested += async (_, args) =>
@@ -103,13 +106,14 @@ internal sealed class MainWindow : Window
         };
     }
 
-    public async Task NewTerminalAsync()
+    public async Task NewTerminalAsync(string? forcedShell = null)
     {
         if (_closing) return;
         try
         {
-            var shell = _shell.SelectedIndex <= 0 ? null : _shell.SelectedItem?.ToString();
-            AddSession(await _coordinator.CreateSessionAsync(shell));
+            var shell = forcedShell ?? (_shell.SelectedIndex <= 0 ? null : _shell.SelectedItem?.ToString());
+            var session = await _coordinator.CreateSessionAsync(shell);
+            await _coordinator.AttachCreatedSessionAsync(this, session);
         }
         catch (Exception exception) { _status.Text = $"创建失败：{exception.Message}"; }
     }
@@ -185,5 +189,22 @@ internal sealed class MainWindow : Window
             DefaultButton = ContentDialogButton.Close
         };
         return await dialog.ShowAsync() == ContentDialogResult.Primary;
+    }
+
+    public async Task RunStartupSmokeAsync(CancellationToken cancellationToken)
+    {
+        var session = SelectedSession ?? throw new InvalidOperationException($"本地 PTY 创建失败：{_status.Text}");
+        var surface = _items[session].Surface;
+        await surface.FirstFrame.WaitAsync(cancellationToken);
+        // The expected marker is absent from the submitted command text: cmd
+        // must expand the variable and execute echo before the marker appears.
+        await session.SendAsync("set SSHDOCK_SMOKE_WORD=SMOKE\recho SSHDOCK_UI_%SSHDOCK_SMOKE_WORD%\r");
+        while (!string.Concat(surface.LastRenderedSnapshot?.Cells.Select(cell => cell.Text) ?? []).Contains("SSHDOCK_UI_SMOKE", StringComparison.Ordinal))
+        {
+            if (surface.RenderFailure.IsCompleted) throw await surface.RenderFailure;
+            if (session.Closed) throw new InvalidOperationException("本地 PTY 在输出 smoke 标记前已退出");
+            await Task.Delay(25, cancellationToken);
+        }
+        if (surface.RenderFailure.IsCompleted) throw await surface.RenderFailure;
     }
 }

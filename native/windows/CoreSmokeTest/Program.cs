@@ -18,9 +18,56 @@ var selectionSnapshot = new TerminalSnapshot(4, 2, new(0, 0, true),
      new(1, 0, "B", "#ffffff", "#000000", false, false, false)], 0, "test");
 Check(TerminalAlgorithms.SelectedText(selectionSnapshot, new(1, 0), new(0, 0)) == "中e\u0301" + Environment.NewLine + "B", "Selection must preserve clusters and wide-cell spacers");
 
+var input = new BoundedInputQueue(10);
+Check(input.TryAppend("中文") && input.ByteCount == 6, "Input capacity must count UTF-8 bytes");
+Check(input.TryPeek(out var oldChunk), "Input head");
+Check(!input.TryAppend("再加") && input.ByteCount == 6 && input.Count == 1, "Over-limit append must reject the entire addition");
+input.Clear();
+Check(input.ByteCount == 0 && input.Generation > oldChunk.Generation, "Cancel must clear bytes and invalidate queued request guards");
+Check(input.TryAppend("B"), "Input after cancellation");
+input.Acknowledge(oldChunk);
+Check(input.Count == 1 && input.ByteCount == 1, "Stale native acknowledgement must not discard new input");
+Check(input.TryPeek(out var newChunk), "New input head");
+input.Acknowledge(newChunk);
+Check(input.Count == 0 && input.ByteCount == 0, "Acknowledged input releases capacity");
+var unicodeInput = new BoundedInputQueue();
+var boundaryText = new string('a', 16383) + "😀中";
+Check(unicodeInput.TryAppend(boundaryText), "Unicode input must fit capacity");
+var rebuilt = new StringBuilder();
+while (unicodeInput.TryPeek(out var chunk))
+{
+    Check(!char.IsHighSurrogate(chunk.Text[^1]), "Chunk boundary must not split a surrogate pair");
+    rebuilt.Append(chunk.Text);
+    unicodeInput.Acknowledge(chunk);
+}
+Check(rebuilt.ToString() == boundaryText, "Input chunking must preserve committed Unicode text");
+
+CoreEvent[] earlyBatch =
+[
+    new("output", "early", new string('x', 100000), null, null, null),
+    new("output", "early", "more bytes", null, null, null),
+    new("error", "early", null, null, "failed", "shell failed"),
+    new("closed", "early", null, 1, null, null)
+];
+var compact = SessionRegistrationBuffer.Compact(earlyBatch);
+Check(compact.Length == 3 && compact.All(item => item.Data is null), "UI notifications must coalesce output and discard raw bytes");
+var registration = new SessionRegistrationBuffer();
+foreach (var item in compact) registration.Append(item);
+var replay = registration.Take("early");
+Check(replay.Select(item => item.Type).SequenceEqual(new[] { "output", "error", "closed" }), "Registration must replay short-lived shell events in order");
+Check(registration.Take("early").Length == 0, "Registration replay is consumed once");
+for (var i = 0; i < 256; i++) registration.Append(new("error", "bounded", null, null, "failed", "error"));
+try
+{
+    registration.Append(new("error", "bounded", null, null, "failed", "overflow"));
+    throw new InvalidOperationException("Registration metadata must have a finite event budget");
+}
+catch (CoreException exception) when (exception.Code == "registration_event_overflow") { }
+Check(registration.Take("bounded").Length == 256, "Rejected metadata append must preserve already retained notifications");
+
 if (args.Contains("--algorithms-only"))
 {
-    Console.WriteLine("PASS keyboard encoding and Unicode selection");
+    Console.WriteLine("PASS keyboard encoding, Unicode selection, bounded input/cancel, and creation-event replay");
     return;
 }
 

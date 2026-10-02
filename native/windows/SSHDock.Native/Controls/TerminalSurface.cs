@@ -57,6 +57,11 @@ internal sealed class TerminalSurface : UserControl, IDisposable
     private bool _selecting;
     private CellPoint? _selectionStart;
     private CellPoint? _selectionEnd;
+    private readonly TaskCompletionSource _firstFrame = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource<Exception> _renderFailure = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    internal Task FirstFrame => _firstFrame.Task;
+    internal Task<Exception> RenderFailure => _renderFailure.Task;
+    internal TerminalSnapshot? LastRenderedSnapshot { get; private set; }
 
     public TerminalSurface(TerminalSession session)
     {
@@ -215,6 +220,22 @@ internal sealed class TerminalSurface : UserControl, IDisposable
 
     private void Draw(CanvasControl sender, CanvasDrawEventArgs args)
     {
+        if (_disposed || _session.Snapshot is null) return;
+        try
+        {
+            DrawSnapshot(sender, args);
+            LastRenderedSnapshot = _session.Snapshot;
+            _firstFrame.TrySetResult();
+        }
+        catch (Exception exception)
+        {
+            _firstFrame.TrySetException(exception);
+            if (_renderFailure.TrySetResult(exception)) _session.SetError($"终端绘制失败：{exception.Message}");
+        }
+    }
+
+    private void DrawSnapshot(CanvasControl sender, CanvasDrawEventArgs args)
+    {
         var snapshot = _session.Snapshot;
         if (_disposed || snapshot is null) return;
         var drawing = args.DrawingSession;
@@ -341,9 +362,8 @@ internal sealed class TerminalSurface : UserControl, IDisposable
         if (encoded is null) { _altText = alt; return; }
         args.Handled = true;
         var pending = TakeCommittedText();
-        if (pending.Length > 0) await _session.SendAsync(pending);
         ClearSelection();
-        await _session.SendAsync(encoded);
+        await _session.SendAsync(pending + encoded);
     }
 
     private void QueueCommit()

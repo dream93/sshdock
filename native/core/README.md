@@ -30,6 +30,8 @@ cargo clippy --locked --manifest-path native/core/Cargo.toml --all-targets -- -D
 
 `terminalEngine` 默认为 `false`。SwiftTerm 接收原始输出并维护自己的终端状态；Windows 创建会话时启用 `terminalEngine`，使用 Alacritty 的连续 VT 解析器维护网格、光标、历史、备用屏幕和终端查询响应。
 
+Windows 的 `portable-pty` 适配器使用 `PSEUDOCONSOLE_INHERIT_CURSOR`，因此 ConPTY 启动时会输出 `ESC[6n` 光标位置查询。启用 `terminalEngine` 时核心自动回复；使用原始输出模式的消费者必须连续解析 VT 查询，并通过 `sessions.input` 回复光标位置（初始位置可回复 `ESC[1;1R`），再进行后续操作。只读取字节并忽略查询会阻塞 ConPTY 输出，需要输出的 Windows PTY 测试与 WinUI 应用均启用终端引擎。[CreatePseudoConsole 官方说明](https://learn.microsoft.com/en-us/windows/console/createpseudoconsole)
+
 快照字段为 `cols`、`rows`、`title`、`offset`、`cursor: {row,col,visible}`、`modes: {applicationCursor,bracketedPaste}` 和 `cells`。每个 cell 包含 `row,col,text,fg,bg,bold,underline,wide`；坐标从 0 开始，相对于可视区域；颜色为 `#rrggbb`。宽字符的后续占位 cell 保留背景，但 `text` 为空。`offset` 是当前历史偏移，底部为 0；查看历史时隐藏光标。
 
 列数支持 2–4096、行数支持 1–1024，可视 cell 总数不超过 200000。每个会话保留最多 10000 行历史，同时限制历史总 cell 数为 2000000。单个核心最多保留 32 个会话；明确关闭且已经完成事件投递的会话在下次创建时释放。

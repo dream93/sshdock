@@ -21,20 +21,50 @@ internal static class Program
 internal sealed class App : Application
 {
     private AppCoordinator? _coordinator;
+    private MainWindow? _window;
 
     protected override async void OnLaunched(LaunchActivatedEventArgs args)
     {
-        Resources.MergedDictionaries.Add(new Microsoft.UI.Xaml.Controls.XamlControlsResources());
+        var smoke = Environment.GetCommandLineArgs().Contains("--startup-smoke");
+        var stage = "xaml-resources";
         try
         {
+            Resources.MergedDictionaries.Add(new Microsoft.UI.Xaml.Controls.XamlControlsResources());
+            stage = "native-core";
             var core = await Task.Run(() => new Core.NativeCoreClient());
             _coordinator = new AppCoordinator(core, DispatcherQueue.GetForCurrentThread());
-            var window = _coordinator.OpenWindow();
-            window.Activate();
-            await window.NewTerminalAsync();
+            stage = "xaml-window";
+            _window = _coordinator.OpenWindow();
+            _window.Activate();
+            stage = "local-pty";
+            await _window.NewTerminalAsync(smoke ? "cmd.exe" : null);
+            if (smoke)
+            {
+                stage = "canvas-and-pty-output";
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+                await _window.RunStartupSmokeAsync(timeout.Token);
+                await WriteSmokeReportAsync(new
+                {
+                    ok = true, xamlWindow = true, canvasFirstFrame = true, localPty = true, ptyOutput = true,
+                    architecture = System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture.ToString()
+                });
+                await _coordinator.CloseWindowAsync(_window, confirm: false);
+                Environment.Exit(0);
+            }
         }
         catch (Exception exception)
         {
+            if (smoke)
+            {
+                await WriteSmokeReportAsync(new { ok = false, stage, error = exception.ToString() });
+                if (_coordinator is not null && _window is not null)
+                {
+                    try { await _coordinator.CloseWindowAsync(_window, confirm: false); }
+                    catch (Exception closeException) { Console.Error.WriteLine(closeException); }
+                }
+                Environment.Exit(1);
+                return;
+            }
             var window = new Window
             {
                 Title = "SSHDock · 启动失败",
@@ -47,5 +77,15 @@ internal sealed class App : Application
             };
             window.Activate();
         }
+    }
+
+    private static async Task WriteSmokeReportAsync(object report)
+    {
+        var arguments = Environment.GetCommandLineArgs();
+        var index = Array.IndexOf(arguments, "--smoke-report");
+        var path = index >= 0 && index + 1 < arguments.Length
+            ? Path.GetFullPath(arguments[index + 1]) : Path.Combine(AppContext.BaseDirectory, "startup-smoke.json");
+        var json = System.Text.Json.JsonSerializer.Serialize(report, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+        await File.WriteAllTextAsync(path, json);
     }
 }

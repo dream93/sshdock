@@ -193,7 +193,9 @@ fn conpty_runs_unicode_resizes_and_orders_shell_exit_after_output() {
 #[test]
 fn conpty_close_cancels_unconsumed_input_and_terminates_child_jobs() {
     let core = Core::default();
-    let id = create(&core, false);
+    // portable-pty's ConPTY adapter requests the initial cursor position. A VT
+    // consumer must answer that DSR before the hosted program produces output.
+    let id = create(&core, true);
     // Windows PowerShell is present in the minimum Windows 10 environment. It
     // creates a descendant process which ignores stdin while sleeping.
     input(&core, &id, b"@echo off\r\npowershell.exe -NoLogo -NoProfile -Command \"[Console]::WriteLine('NO_STDIN_' + 'READY'); Start-Sleep -Seconds 60\"\r\n");

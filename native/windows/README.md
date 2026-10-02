@@ -28,13 +28,13 @@
 - 中文输入使用位于终端光标旁的原生 TextBox 代理。组合文本只在本地显示，提交后才发送给 PTY。候选框位置由原生文本服务决定。
 - “移到独立窗口”把已有会话迁移到新窗口，不创建第二个 PTY。关闭独立窗口会把会话移回仍存在的原窗口；原窗口已关闭时移到另一个现存窗口。所有窗口都遵循“剩余窗口承接会话”的规则。
 - 关闭最后一个窗口且仍有运行中的会话时，显示结束会话确认。关闭运行中的标签也需要确认，随后结束该标签所属会话。退出时停止 poll、释放核心并清理子进程。
-- 核心输入队列满时展示 `INPUT_BACKPRESSURE` 错误并保留未发送字符；“重试输入”按原顺序再次提交。
+- 核心输入队列满时展示 `INPUT_BACKPRESSURE` 错误并保留未发送字符；“重试输入”按原顺序再次提交。每会话 UI 待发送输入有 1 MiB UTF-8 字节上限，超限整次拒绝新追加并明确提示未发送。“取消未发送输入”清空尚未提交的输入，已提交的输入请求无法撤回；会话关闭时也会清空待发送缓冲。
 
 ## 实现边界和验证
 
 `NativeCoreClient` 在后台执行 JSON ABI 请求；请求串行维护顺序，poll 使用独立后台通道持续排空有界输出队列。SafeHandle 保证每次 P/Invoke 调用及已经排队的 poll 持有核心生命周期，所有响应字符串由核心释放函数释放。启动时验证 ABI 版本为 1。
 
-每个 poll 批次只标记受影响会话一次；仅有活动视图的会话请求屏幕快照。一个窗口只创建一个 Win2D CanvasControl 来绘制一个终端。VT 解析、网格、历史和模式保存在共享 Rust 核心，UI 不再解析控制序列。视图加载、卸载和迁移更新唯一 resize owner，过期的延迟 resize 在进入核心前再次检查 owner。
+每个 poll 批次先压缩为不含 PTY 原始字节的通知，最多有一个批次等待 UI 确认，确认后才继续 poll；退出取消会直接结束确认等待。仅有活动视图的会话请求屏幕快照。创建期间到达的未知会话通知临时保存在有界元数据缓冲中，注册后按序重放，短命 shell 的退出和错误也能显示。每个终端标签创建一个 Win2D CanvasControl，使用同一画布绘制该终端所有单元格。VT 解析、网格、历史和模式保存在共享 Rust 核心，UI 不再解析控制序列。视图加载、卸载和迁移更新唯一 resize owner，过期的延迟 resize 在进入核心前再次检查 owner。
 
 无 UI 的真实 C# / Rust ABI 测试可以在 macOS 运行：
 
@@ -44,7 +44,15 @@ SSHDOCK_CORE_LIBRARY="$PWD/native/core/target/debug/libsshdock_core.dylib" \
   dotnet run --project native/windows/CoreSmokeTest/CoreSmokeTest.csproj
 ```
 
-测试覆盖按键编码、Unicode 选区、ABI 版本、本地 PTY 字节输出、快照解析、resize、关闭事件、并发 poll/释放和重复释放。仅运行纯算法检查可加 `-- --algorithms-only`。
+测试覆盖按键编码、Unicode 选区、输入字节上限/取消/旧请求确认、短命会话事件重放、ABI 版本、本地 PTY 字节输出、快照解析、resize、关闭事件、并发 poll/释放和重复释放。仅运行纯算法检查可加 `-- --algorithms-only`。
+
+Windows 自包含产物还提供真实启动 smoke 模式：
+
+```powershell
+./native/windows/artifacts/x64/SSHDock.Native.exe --startup-smoke --smoke-report "$PWD/native/windows/artifacts/x64/startup-smoke.json"
+```
+
+该模式创建真实 XAML 窗口、本地 PTY 和 Win2D 首帧，再等待 shell 输出测试标记；通过后写入 `ok: true` 的 JSON 报告、自动清理会话并退出 0。失败写入阶段及错误并退出 1，绘制/输出等待限制为 20 秒；CI 还应给整个进程设置超时，捕获应用初始化之前的故障。此模式跳过退出确认，仅用于自动验证，普通启动保留关闭保护。
 
 macOS 能还原依赖，并通过以下命令编译 C# / WinRT 源码；完整 Windows 发布仍需 Windows 的 `mt.exe` 和 `makepri.exe`，下面的编译检查不会生成可运行的 Windows 发布包：
 

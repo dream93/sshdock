@@ -25,6 +25,7 @@ jobs:
   regression:
     name: Electron regression
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -34,6 +35,7 @@ jobs:
 
   macos:
     name: macOS ${{ matrix.arch }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -65,6 +67,7 @@ jobs:
   windows:
     name: Windows ${{ matrix.arch }}
     runs-on: windows-2025
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -94,6 +97,25 @@ jobs:
           $env:SSHDOCK_CORE_LIBRARY = Join-Path $PWD 'native/windows/artifacts/x64/sshdock_core.dll'
           dotnet run --project native/windows/CoreSmokeTest/CoreSmokeTest.csproj --configuration Release
           if ($LASTEXITCODE -ne 0) { throw 'C# / native ABI verification failed' }
+      - name: Verify WinUI startup and first terminal frame
+        if: matrix.arch == 'x64'
+        shell: pwsh
+        run: |
+          $app = Join-Path $PWD 'native/windows/artifacts/x64/SSHDock.Native.exe'
+          $report = Join-Path $PWD 'native/windows/artifacts/x64/startup-smoke.json'
+          $arguments = @('--startup-smoke', '--smoke-report', "`"$report`"")
+          $process = Start-Process -FilePath $app -ArgumentList $arguments -WorkingDirectory (Split-Path $app) -PassThru
+          if (-not $process.WaitForExit(45000)) {
+            $process.Kill($true)
+            throw 'WinUI startup verification timed out'
+          }
+          if (Test-Path $report) { Get-Content $report }
+          if ($process.ExitCode -ne 0) { throw "WinUI startup failed with exit code $($process.ExitCode)" }
+          if (-not (Test-Path $report)) { throw 'WinUI startup report is missing' }
+          $result = Get-Content $report -Raw | ConvertFrom-Json
+          if (-not ($result.ok -and $result.xamlWindow -and $result.canvasFirstFrame -and $result.localPty -and $result.ptyOutput)) {
+            throw 'WinUI startup did not verify every required stage'
+          }
       - uses: actions/upload-artifact@v7
         with:
           name: native-windows-${{ matrix.arch }}
