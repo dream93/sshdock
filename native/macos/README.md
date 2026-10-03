@@ -49,9 +49,13 @@ swift test --package-path native/macos --build-system native
 
 XCTest 运行真实 `/bin/sh` 和 PTY，验证非法 UTF-8 字节完整传输、`stty size` 行列同步、分段输入顺序、自然退出码、主动关闭，以及停止后的请求拒绝。输入队列回归覆盖背压重试与后续输入顺序、超过 1 MiB 的字节分块、容量原子拒绝和取消后的陈旧回调。另有不显示窗口的 AppKit 回归测试，覆盖终端在主窗口与独立窗口之间移动、旧容器延迟更新、解析器和中文内容的保留、双会话前台窗口路由、模态阻断、返回与删除路径，以及过期焦点回调。
 
-配置回归使用临时目录与假凭据存储，验证 JSON 无秘密、钥匙串失败不回退、元数据迁移保留 ID/丢弃密码且不重复、坏 JSON 保护、主机指纹变化拒绝、Linux 两次采样计算及本地终端不继承远程目录。真实 SSH 集成测试需设置 `SSHDOCK_TEST_SSH_HOST`、`SSHDOCK_TEST_SSH_PORT`、`SSHDOCK_TEST_SSH_USERNAME`、`SSHDOCK_TEST_SSH_KEY`，可选 `SSHDOCK_TEST_SSH_PASSPHRASE`；未设置则明确跳过，不视为 SSH 已通过。2026-10-03 的隔离 OpenSSH fixture 验证了错误指纹拒绝、真实命令输出与尺寸、中文目录/空文件/4 MiB 原始字节递归传输、进度事件、统计解码和退出码 4。SSH/SFTP 界面和真实 Keychain 交互仍待单独 GUI 验收。
+配置回归使用临时目录与假凭据存储，验证 JSON 无秘密、钥匙串失败不回退、元数据迁移保留 ID/丢弃密码且不重复、坏 JSON 保护、主机指纹变化拒绝、Linux 两次采样计算及本地终端不继承远程目录。真实 SSH 集成测试需设置 `SSHDOCK_TEST_SSH_HOST`、`SSHDOCK_TEST_SSH_PORT`、`SSHDOCK_TEST_SSH_USERNAME`、`SSHDOCK_TEST_SSH_KEY`，可选 `SSHDOCK_TEST_SSH_PASSPHRASE`；未设置则明确跳过，不视为 SSH 已通过。2026-10-03 的隔离 OpenSSH fixture 验证了错误指纹拒绝、真实命令输出与尺寸、中文目录/空文件/4 MiB 原始字节递归传输、进度事件、统计解码和退出码 4。
 
-2026-10-03 在 macOS arm64 运行 17 项 Release XCTest，全部通过且没有跳过。另一个真实 SSH 回归在 64 MiB 上传已经开始后停止核心，验证文件队列及时取消、所有异步请求恢复及销毁后的句柄拒绝。`bash native/scripts/test-macos.sh` 可自动创建和清理隔离 OpenSSH fixture 后运行这些测试。
+2026-10-03 在 macOS arm64 运行 18 项 Release XCTest，全部通过且没有跳过。真实 SSH 回归在 64 MiB 上传已经开始后停止核心，验证文件队列及时取消、所有异步请求恢复及销毁后的句柄拒绝；传输状态回归验证迟到进度不能复活已结束状态，成功响应提供最终字节计数。`bash native/scripts/test-macos.sh` 可自动创建和清理隔离 OpenSSH fixture 后运行这些测试。
+
+同日使用仅监听本机的 OpenSSH 服务完成原生 SSH GUI 验收：加密私钥登录、以 `ssh-keygen` 独立核对指纹后首次信任、真实命令输出、旧连接自动导入、SFTP 路径规范化、中文目录创建、含中文路径与空文件的目录上传和右键下载均通过，上传和下载的文件逐字节一致，进度显示完成。SSH shell 移到独立窗口再移回时 PID 保持一致，PTY 从 42×36 变为 55×35，再恢复 42×36；移回后直接输入有效。远程 `exit 7` 显示正确退出码，文件操作和统计随连接停止。测试服务为非 Linux，统计面板明确显示不支持 `/proc`。
+
+真实 Keychain 写入和重开读取、GUI 密码认证、传输取消、Linux 实机统计尚未完成手工验收；密码认证、取消和 Linux 统计已有核心及 CI 自动测试覆盖。
 
 2026-10-03 在 macOS arm64 上完成实际 GUI 检查：中文输出、独立窗口完整显示、移交/移回时 shell PID 保持一致；独立窗口放大后 PTY 从 112×37 变为 181×48，移回主窗口为 130×37。Vim 的中文、备用屏幕、方向键和退出恢复、Ctrl-C、自然退出码 7、120 行中文输出的历史滚动，以及退出确认后两个已知 shell PID 的清理均通过。普通历史可以向上阅读并回到底部；观看历史期间新增输出尚未测试。
 
