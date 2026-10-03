@@ -42,8 +42,14 @@ final class TerminalContainer: NSView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         if let window, let session, presentation.owns(session) {
-            DispatchQueue.main.async { [weak window, weak session] in
-                if let session { window?.makeFirstResponder(session.terminal) }
+            DispatchQueue.main.async { [weak self, weak window, weak session] in
+                guard let self, let window, let session, self.session === session,
+                      presentation.owns(session), session.terminal.superview === self,
+                      session.terminal.window === window,
+                      let store = session.store, !store.isClosing(session),
+                      store.sessions.contains(where: { $0 === session }),
+                      presentation == .detached || store.selectedID == session.id else { return }
+                window.makeFirstResponder(session.terminal)
             }
         }
     }
@@ -146,7 +152,7 @@ struct MainView: View {
                         Image(systemName: "macwindow").font(.largeTitle)
                         Text("会话已移至独立窗口")
                         Button("显示窗口") { store.windowCoordinator?.focusDetached(session) }
-                        Button("移回主窗口") { store.windowCoordinator?.closeDetached(session) }
+                        Button("移回主窗口") { store.windowCoordinator?.returnToMain(session) }
                     }.frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     TerminalHost(session: session).id(session.id).frame(maxWidth: .infinity, maxHeight: .infinity)

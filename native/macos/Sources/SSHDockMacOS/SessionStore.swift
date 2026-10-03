@@ -103,6 +103,7 @@ final class SessionStore: ObservableObject {
     private var nextNumber = 0
     private var pendingEvents: [String: [CoreEvent]] = [:]
     private var isStopping = false
+    private var closingSessionIDs: Set<UUID> = []
     private lazy var bridge = CoreBridge(deliverEvents: { [weak self] events, consumed in
         // Dispatch FIFO is deliberate: unstructured MainActor tasks may run
         // in another order, corrupting an ANSI/UTF-8 stream between poll batches.
@@ -125,10 +126,19 @@ final class SessionStore: ObservableObject {
     }
 
     func select(_ session: TerminalSession) {
+        guard sessions.contains(where: { $0 === session }), !isClosing(session) else { return }
         selectedID = session.id
         if session.detached { windowCoordinator?.focusDetached(session) }
-        else { DispatchQueue.main.async { session.terminal.window?.makeFirstResponder(session.terminal) } }
+        else {
+            DispatchQueue.main.async { [weak self, weak session] in
+                guard let self, let session, selectedID == session.id,
+                      !session.detached, !isClosing(session), sessions.contains(where: { $0 === session }) else { return }
+                session.terminal.window?.makeFirstResponder(session.terminal)
+            }
+        }
     }
+
+    func isClosing(_ session: TerminalSession) -> Bool { closingSessionIDs.contains(session.id) }
 
     func start(_ session: TerminalSession) async {
         do {
@@ -187,6 +197,7 @@ final class SessionStore: ObservableObject {
     }
 
     func close(_ session: TerminalSession) {
+        guard sessions.contains(where: { $0 === session }), !isClosing(session) else { return }
         if session.state == .starting { return }
         if session.state == .running {
             let alert = NSAlert()
@@ -196,13 +207,15 @@ final class SessionStore: ObservableObject {
             alert.addButton(withTitle: "取消")
             guard alert.runModal() == .alertFirstButtonReturn else { return }
         }
+        closingSessionIDs.insert(session.id)
         session.state = .closed
         session.inputQueue.shutdown()
         Task {
             if let id = session.coreID { await perform("sessions.close", ["sessionId": id]) }
-            windowCoordinator?.closeDetached(session)
+            windowCoordinator?.removeDetachedWindow(for: session)
             sessions.removeAll { $0.id == session.id }
             if selectedID == session.id { selectedID = sessions.last?.id }
+            closingSessionIDs.remove(session.id)
         }
     }
 
