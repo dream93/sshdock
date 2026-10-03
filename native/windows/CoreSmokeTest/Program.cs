@@ -77,10 +77,15 @@ var created = await core.RequestAsync<LocalSession>("local.create", new
     cols = 80, rows = 24, shell = OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/sh", terminalEngine = true
 });
 Check(!string.IsNullOrWhiteSpace(created.SessionId), "Created session ID");
+// Keep the expected marker out of the input: receiving command echo alone must
+// not pass. Windows uses the same CR that the UI emits for Enter.
+var command = OperatingSystem.IsWindows()
+    ? "set SSHDOCK_ABI_WORD=OK\recho SSHDOCK_ABI_%SSHDOCK_ABI_WORD%\r"
+    : "printf 'SSHDOCK_ABI_%s\\n' OK\r";
 await core.RequestAsync<JsonElement>("sessions.input", new
 {
     sessionId = created.SessionId,
-    data = Convert.ToBase64String(Encoding.UTF8.GetBytes("echo SSHDOCK_ABI_OK\r"))
+    data = Convert.ToBase64String(Encoding.UTF8.GetBytes(command))
 });
 var received = new StringBuilder();
 var deadline = DateTime.UtcNow.AddSeconds(10);
@@ -93,7 +98,8 @@ while (DateTime.UtcNow < deadline && !received.ToString().Contains("SSHDOCK_ABI_
     }
     await Task.Delay(20);
 }
-Check(received.ToString().Contains("SSHDOCK_ABI_OK"), "PTY byte stream must reach managed P/Invoke poll");
+Check(received.ToString().Contains("SSHDOCK_ABI_OK"),
+    $"Executed shell output must reach managed P/Invoke poll; received={JsonSerializer.Serialize(received.ToString())}");
 await core.RequestAsync<JsonElement>("sessions.resize", new { sessionId = created.SessionId, cols = 83, rows = 17 });
 var snapshot = await core.RequestAsync<TerminalSnapshot>("terminal.snapshot", new { sessionId = created.SessionId });
 Check(snapshot.Cols == 83 && snapshot.Rows == 17, "Native terminal snapshot must reflect resize");

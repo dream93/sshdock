@@ -8,7 +8,14 @@ namespace SSHDock.Native;
 internal sealed class MainWindow : Window
 {
     private readonly AppCoordinator _coordinator;
-    private readonly TabView _tabs = new() { TabWidthMode = TabViewWidthMode.SizeToContent, IsAddTabButtonVisible = true };
+    private readonly TabView _tabs = new()
+    {
+        TabWidthMode = TabViewWidthMode.SizeToContent, IsAddTabButtonVisible = true,
+        HorizontalAlignment = HorizontalAlignment.Stretch,
+        VerticalAlignment = VerticalAlignment.Stretch,
+        HorizontalContentAlignment = HorizontalAlignment.Stretch,
+        VerticalContentAlignment = VerticalAlignment.Stretch
+    };
     private readonly ComboBox _shell = new() { Width = 145, SelectedIndex = 0 };
     private readonly ComboBox _font = new() { Width = 145, SelectedIndex = 0 };
     private readonly NumberBox _fontSize = new() { Value = 14, Minimum = 10, Maximum = 32, Width = 80, SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact };
@@ -19,6 +26,7 @@ internal sealed class MainWindow : Window
     private bool _dialogOpen;
     public MainWindow? HomeWindow { get; }
     public bool IsClosing => _closing || _allowClose;
+    private string _startupSmokePhase = "not-started";
 
     public IEnumerable<TerminalSession> Sessions => _items.Keys;
     private TerminalSession? SelectedSession => _items.FirstOrDefault(pair => ReferenceEquals(pair.Value.Tab, _tabs.SelectedItem)).Key;
@@ -123,7 +131,12 @@ internal sealed class MainWindow : Window
         if (_items.ContainsKey(session)) return;
         var surface = new TerminalSurface(session);
         surface.SetFont(_font.SelectedItem?.ToString() ?? "Cascadia Mono", (float)_fontSize.Value);
-        var tab = new TabViewItem { Header = session.Title, Content = surface, IsClosable = true };
+        var tab = new TabViewItem
+        {
+            Header = session.Title, Content = surface, IsClosable = true,
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
+            VerticalContentAlignment = VerticalAlignment.Stretch
+        };
         Action listener = () =>
         {
             tab.Header = session.Title;
@@ -195,16 +208,58 @@ internal sealed class MainWindow : Window
     {
         var session = SelectedSession ?? throw new InvalidOperationException($"本地 PTY 创建失败：{_status.Text}");
         var surface = _items[session].Surface;
+        _startupSmokePhase = "canvas-first-frame";
         await surface.FirstFrame.WaitAsync(cancellationToken);
+        _startupSmokePhase = "cmd-prompt";
+        await WaitForOutputAsync(() => ScreenText(surface.LastRenderedSnapshot)
+            .Split('\n').Any(line => line.TrimEnd().EndsWith('>')));
         // The expected marker is absent from the submitted command text: cmd
         // must expand the variable and execute echo before the marker appears.
+        // Use the same CR as the terminal's Enter key, so startup also verifies
+        // the production input path rather than a separate command submission form.
+        _startupSmokePhase = "command-input";
         await session.SendAsync("set SSHDOCK_SMOKE_WORD=SMOKE\recho SSHDOCK_UI_%SSHDOCK_SMOKE_WORD%\r");
-        while (!string.Concat(surface.LastRenderedSnapshot?.Cells.Select(cell => cell.Text) ?? []).Contains("SSHDOCK_UI_SMOKE", StringComparison.Ordinal))
+        if (session.HasPendingInput) throw new InvalidOperationException($"smoke 输入未提交：{session.Status}");
+        _startupSmokePhase = "command-output";
+        await WaitForOutputAsync(() => ScreenText(surface.LastRenderedSnapshot).Contains("SSHDOCK_UI_SMOKE", StringComparison.Ordinal));
+        _startupSmokePhase = "complete";
+
+        async Task WaitForOutputAsync(Func<bool> completed)
         {
+            while (!completed())
+            {
+                if (surface.RenderFailure.IsCompleted) throw await surface.RenderFailure;
+                if (session.Closed) throw new InvalidOperationException("本地 PTY 在完成 smoke 验证前已退出");
+                await Task.Delay(25, cancellationToken);
+            }
             if (surface.RenderFailure.IsCompleted) throw await surface.RenderFailure;
-            if (session.Closed) throw new InvalidOperationException("本地 PTY 在输出 smoke 标记前已退出");
-            await Task.Delay(25, cancellationToken);
         }
-        if (surface.RenderFailure.IsCompleted) throw await surface.RenderFailure;
+    }
+
+    internal object StartupSmokeDiagnostics()
+    {
+        var session = SelectedSession;
+        var surface = session is not null && _items.TryGetValue(session, out var item) ? item.Surface : null;
+        return new
+        {
+            phase = _startupSmokePhase, windowStatus = _status.Text,
+            sessionId = session?.Id, sessionStatus = session?.Status, sessionClosed = session?.Closed,
+            pendingInput = session?.HasPendingInput,
+            canvasFirstFrame = surface?.FirstFrame.IsCompletedSuccessfully,
+            canvasWidth = surface?.CanvasWidth, canvasHeight = surface?.CanvasHeight,
+            surfaceWidth = surface?.ActualWidth, surfaceHeight = surface?.ActualHeight,
+            cols = session?.Snapshot?.Cols, rows = session?.Snapshot?.Rows,
+            cursor = session?.Snapshot?.Cursor,
+            lastRenderedText = ScreenText(surface?.LastRenderedSnapshot),
+            sessionSnapshotText = ScreenText(session?.Snapshot)
+        };
+    }
+
+    private static string ScreenText(Core.TerminalSnapshot? snapshot)
+    {
+        if (snapshot is null) return "";
+        var text = string.Join('\n', snapshot.Cells.GroupBy(cell => cell.Row).OrderBy(row => row.Key)
+            .Select(row => string.Concat(row.OrderBy(cell => cell.Col).Select(cell => cell.Text)).TrimEnd()));
+        return text.Length > 16384 ? text[^16384..] : text;
     }
 }

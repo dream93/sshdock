@@ -48,7 +48,8 @@ public sealed partial class App : Application
                 await WriteSmokeReportAsync(new
                 {
                     ok = true, xamlWindow = true, canvasFirstFrame = true, localPty = true, ptyOutput = true,
-                    architecture = System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture.ToString()
+                    architecture = System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture.ToString(),
+                    diagnostics = _window.StartupSmokeDiagnostics()
                 });
                 await _coordinator.CloseWindowAsync(_window, confirm: false);
                 Environment.Exit(0);
@@ -58,7 +59,11 @@ public sealed partial class App : Application
         {
             if (smoke)
             {
-                await WriteSmokeReportAsync(new { ok = false, stage, error = exception.ToString() });
+                await WriteSmokeReportAsync(new
+                {
+                    ok = false, stage, error = exception.ToString(),
+                    diagnostics = _window?.StartupSmokeDiagnostics()
+                });
                 if (_coordinator is not null && _window is not null)
                 {
                     try { await _coordinator.CloseWindowAsync(_window, confirm: false); }

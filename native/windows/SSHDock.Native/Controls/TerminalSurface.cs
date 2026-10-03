@@ -62,10 +62,16 @@ internal sealed class TerminalSurface : UserControl, IDisposable
     internal Task FirstFrame => _firstFrame.Task;
     internal Task<Exception> RenderFailure => _renderFailure.Task;
     internal TerminalSnapshot? LastRenderedSnapshot { get; private set; }
+    internal double CanvasWidth => _canvas.ActualWidth;
+    internal double CanvasHeight => _canvas.ActualHeight;
 
     public TerminalSurface(TerminalSession session)
     {
         _session = session;
+        HorizontalAlignment = HorizontalAlignment.Stretch;
+        VerticalAlignment = VerticalAlignment.Stretch;
+        HorizontalContentAlignment = HorizontalAlignment.Stretch;
+        VerticalContentAlignment = VerticalAlignment.Stretch;
         _input.RenderTransform = _inputPosition;
         AutomationProperties.SetName(_input, "终端输入");
         AutomationProperties.SetName(_canvas, "终端输出");
