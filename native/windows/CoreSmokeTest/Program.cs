@@ -98,6 +98,12 @@ var transferBatch = SessionRegistrationBuffer.Compact([
     new("transfer", "ssh", null, null, null, null, "upload", 10, 100, "running"),
     new("transfer", "ssh", null, null, null, null, "upload", 100, 100, "completed")]);
 Check(transferBatch.Length == 1 && transferBatch[0].State == "completed", "Transfer UI notifications must retain the latest batch progress");
+var largeExit = JsonSerializer.Deserialize<CoreEvent[]>("""[{"type":"closed","sessionId":"ssh","exitCode":4294967295}]""", NativeCoreClient.JsonOptions);
+Check(largeExit is { Length: 1 } && largeExit[0].ExitCode == 4294967295L, "Unsigned native/SSH exit codes must not stop polling");
+var largeProgress = JsonSerializer.Deserialize<CoreEvent[]>("""[{"type":"transfer","sessionId":"ssh","transferId":"download","transferred":18446744073709551615,"total":18446744073709551615,"state":"running"}]""", NativeCoreClient.JsonOptions);
+Check(largeProgress is { Length: 1 } && largeProgress[0].Total == ulong.MaxValue, "Unsigned transfer counters must not stop polling");
+var largeFile = JsonSerializer.Deserialize<SftpEntry>("""{"name":"large","path":"/large","isDirectory":false,"isSymlink":false,"size":18446744073709551615,"modified":null}""", NativeCoreClient.JsonOptions);
+Check(largeFile?.Size == ulong.MaxValue, "Remote unsigned file sizes must deserialize without affecting other sessions");
 try { RemoteAlgorithms.JoinPath("/home/test", "../escape"); throw new InvalidOperationException("Traversal must be rejected"); }
 catch (ArgumentException) { }
 var statsBefore = new LinuxStats(true, 100, 40, 4096, 2048, 1000, 500, 0.5);

@@ -37,23 +37,33 @@ struct ConnectionSidebar: View {
             if repository.connections.isEmpty {
                 Text("新建连接，或导入旧版连接。密码和私钥口令只保存到 macOS 钥匙串。").font(.caption).foregroundStyle(.secondary).padding(12)
             }
-            List(repository.connections) { profile in
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(profile.name).font(.headline).lineLimit(1)
-                    Text("\(profile.username)@\(profile.host):\(profile.port)").font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                    HStack {
-                        Button("连接") { edit(profile, connect: true) }.disabled(store.connectingIDs.contains(profile.id))
-                        if store.connectingIDs.contains(profile.id) { ProgressView().controlSize(.small) }
-                        Spacer()
-                        Button { edit(profile, connect: false) } label: { Image(systemName: "pencil") }.help("编辑连接")
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 4) {
+                    ForEach(repository.connections) { profile in
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(profile.name).font(.headline).lineLimit(1)
+                            Text("\(profile.username)@\(profile.host):\(String(profile.port))").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                            HStack {
+                                Button("连接") { edit(profile, connect: true) }.disabled(store.connectingIDs.contains(profile.id))
+                                    .buttonStyle(.borderless)
+                                    .accessibilityLabel("连接 \(profile.name)")
+                                    .accessibilityIdentifier("connect-\(profile.id.uuidString)")
+                                if store.connectingIDs.contains(profile.id) { ProgressView().controlSize(.small) }
+                                Spacer()
+                                Button { edit(profile, connect: false) } label: { Image(systemName: "pencil") }.help("编辑连接")
+                                    .buttonStyle(.borderless)
+                                    .accessibilityLabel("编辑 \(profile.name)")
+                                    .accessibilityIdentifier("edit-\(profile.id.uuidString)")
+                            }
+                        }.padding(.vertical, 4).padding(.horizontal, 10)
+                            .contextMenu {
+                                Button("编辑") { edit(profile, connect: false) }
+                                Button("重置主机信任") { resetTrust(profile) }
+                                Button("删除连接", role: .destructive) { delete(profile) }
+                            }
                     }
-                }.padding(.vertical, 4)
-                    .contextMenu {
-                        Button("编辑") { edit(profile, connect: false) }
-                        Button("重置主机信任") { resetTrust(profile) }
-                        Button("删除连接", role: .destructive) { delete(profile) }
-                    }
-            }.listStyle(.sidebar)
+                }.padding(.horizontal, 6).padding(.vertical, 4)
+            }.frame(maxWidth: .infinity, maxHeight: .infinity)
             Button("导入旧版 connections.json", action: importMetadata).padding(.horizontal, 12).padding(.bottom, 12)
         }
         .sheet(item: $action) { item in

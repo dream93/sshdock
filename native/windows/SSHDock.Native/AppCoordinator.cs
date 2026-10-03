@@ -216,15 +216,19 @@ internal sealed class AppCoordinator
         foreach (var session in window.Sessions.ToArray())
         {
             window.RemoveSession(session);
-            await CloseSessionAsync(session);
+            if (_remoteTools.Remove(session.Id, out var tools)) tools.Shutdown();
+            _sessions.Remove(session.Id);
+            session.ReleaseAllViews();
         }
         _windows.Remove(window);
         if (_windows.Count == 0)
         {
             _shuttingDown = true;
             _stop.Cancel();
-            await _pollTask;
+            // Cancel all native work before waiting for occupied request lanes.
+            // Final app shutdown does not queue per-session closes behind resize.
             await _core.DisposeAsync();
+            await _pollTask;
             _stop.Dispose();
         }
         window.FinishClose();
@@ -274,7 +278,7 @@ internal sealed class TerminalSession(NativeCoreClient core, LocalSession create
         _statusRevision++;
         Changed?.Invoke();
     }
-    public void MarkClosed(int? exitCode)
+    public void MarkClosed(long? exitCode)
     {
         Closed = true;
         _pendingInput.Clear();

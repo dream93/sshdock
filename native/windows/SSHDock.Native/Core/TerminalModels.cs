@@ -3,8 +3,8 @@ using System.Text;
 namespace SSHDock.Native.Core;
 
 public sealed record LocalSession(string SessionId, string Title, string Cwd, string Kind = "local", bool Closed = false);
-public sealed record CoreEvent(string Type, string? SessionId, string? Data, int? ExitCode, string? Code, string? Message,
-    string? TransferId = null, long? Transferred = null, long? Total = null, string? State = null);
+public sealed record CoreEvent(string Type, string? SessionId, string? Data, long? ExitCode, string? Code, string? Message,
+    string? TransferId = null, ulong? Transferred = null, ulong? Total = null, string? State = null);
 public sealed record TerminalCursor(int Row, int Col, bool Visible);
 public sealed record TerminalCell(int Row, int Col, string Text, string Fg, string Bg, bool Bold, bool Underline, bool Wide);
 public sealed record TerminalModes(bool ApplicationCursor, bool BracketedPaste);

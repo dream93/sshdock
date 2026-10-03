@@ -500,7 +500,7 @@ impl SshSession {
                     let path = sftp.canonicalize(string(params, "path")?).await.map_err(sftp_error)?;
                     let mut entries = vec![];
                     for entry in sftp.read_dir(&path).await.map_err(sftp_error)? {
-                        safe_name(&entry.file_name())?;
+                        safe_remote_name(&entry.file_name())?;
                         let attr = entry.metadata();
                         entries.push(json!({"name":entry.file_name(),"path":entry.path(),"isDirectory":attr.is_dir(),"isSymlink":attr.is_symlink(),"size":attr.size.unwrap_or(0),"modified":attr.mtime}));
                         if entries.len() > MAX_TREE_ENTRIES { return Err(CoreError::new("sftp_limit", "directory exceeds 100000 entries")); }
@@ -620,7 +620,7 @@ fn string<'a>(params: &'a Value, name: &str) -> CoreResult<&'a str> {
             )
         })
 }
-fn safe_name(name: &str) -> CoreResult<()> {
+fn safe_remote_name(name: &str) -> CoreResult<()> {
     if name.is_empty()
         || name == "."
         || name == ".."
@@ -633,6 +633,41 @@ fn safe_name(name: &str) -> CoreResult<()> {
             "unsafe_filename",
             "remote filename cannot safely be represented locally",
         ));
+    }
+    Ok(())
+}
+fn safe_name(name: &str) -> CoreResult<()> {
+    safe_remote_name(name)?;
+    #[cfg(windows)]
+    {
+        // Windows device names remain reserved even with an extension. Trailing
+        // spaces/dots alias other paths, so they cannot represent a unique file.
+        let stem = name
+            .split('.')
+            .next()
+            .unwrap_or_default()
+            .trim_end_matches([' ', '.'])
+            .to_ascii_uppercase();
+        let serial_device = ["COM", "LPT"].iter().any(|prefix| {
+            stem.strip_prefix(prefix).is_some_and(|suffix| {
+                matches!(
+                    suffix,
+                    "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"
+                )
+            })
+        });
+        if name.ends_with([' ', '.'])
+            || name
+                .chars()
+                .any(|c| c.is_control() || matches!(c, '<' | '>' | '"' | '|' | '?' | '*'))
+            || matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+            || serial_device
+        {
+            return Err(CoreError::new(
+                "unsafe_filename",
+                "filename is reserved or aliases another path on Windows",
+            ));
+        }
     }
     Ok(())
 }
@@ -672,7 +707,7 @@ async fn remove_tree(sftp: &SftpSession, path: &str) -> CoreResult<()> {
         if attr.is_dir() && !attr.is_symlink() {
             pending.push((path.clone(), true, depth));
             for entry in sftp.read_dir(&path).await.map_err(sftp_error)? {
-                safe_name(&entry.file_name())?;
+                safe_remote_name(&entry.file_name())?;
                 pending.push((entry.path(), false, depth + 1));
             }
         } else {
@@ -741,6 +776,10 @@ async fn transfer_tree(
                 "download destination must have a filename",
             )
         })?;
+        #[cfg(windows)]
+        safe_name(name.to_str().ok_or_else(|| {
+            CoreError::new("unsafe_filename", "download filename must be UTF-8")
+        })?)?;
         let destination = parent.join(name);
         reject_local_symlink_ancestors(&destination).await?;
         destination
@@ -1013,5 +1052,55 @@ mod tests {
             assert!(safe_name(name).is_err());
         }
         assert!(safe_name("中文文件.txt").is_ok());
+    }
+    #[cfg(windows)]
+    #[test]
+    fn reject_windows_devices_aliases_and_forbidden_characters() {
+        for name in [
+            "NUL",
+            "nul.txt",
+            "CON",
+            "con.tar.gz",
+            "PRN",
+            "aux.log",
+            "COM1",
+            "com9.bin",
+            "LPT1",
+            "lpt9.txt",
+            "COM¹",
+            "LPT³.txt",
+            "name.",
+            "name ",
+            "a<b",
+            "a>b",
+            "a\"b",
+            "a|b",
+            "a?b",
+            "a*b",
+            "a\u{001f}b",
+        ] {
+            assert!(safe_name(name).is_err(), "must reject {name:?}");
+        }
+        for name in ["COM10.txt", "console.txt", "中文.txt", ".hidden"] {
+            assert!(safe_name(name).is_ok());
+        }
+        // Remote names must remain browsable/deletable even if not downloadable.
+        assert!(safe_remote_name("NUL.txt").is_ok());
+    }
+    #[cfg(not(windows))]
+    #[test]
+    fn preserve_posix_filenames_which_windows_cannot_represent() {
+        for name in [
+            "NUL",
+            "CON.txt",
+            "COM1",
+            "LPT9",
+            "a<b",
+            "a?b",
+            "trailing.",
+            "trailing ",
+        ] {
+            assert!(safe_name(name).is_ok());
+        }
     }
 }

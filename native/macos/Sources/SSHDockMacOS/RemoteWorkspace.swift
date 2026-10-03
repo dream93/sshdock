@@ -170,15 +170,19 @@ final class RemoteWorkspace: ObservableObject {
            !confirm("覆盖本地“\(entry.name)”？", detail: "同名文件将被覆盖，目录内容可能合并。", action: "继续下载") { return }
         Task { await transfer(method: "sftp.download", local: target.path, remote: entry.path, title: "下载 \(entry.name)") }
     }
-    private func transfer(method: String, local: String, remote: String, title: String) async {
+    func transfer(method: String, local: String, remote: String, title: String) async {
         guard !busy, !stopped else { return }
         busy = true; defer { busy = false }
         let id = UUID().uuidString
         transfers.removeAll { $0.state != "running" }
         transfers.append(RemoteTransfer(id: id, title: title))
         do {
-            _ = try await call(method, ["localPath": local, "remotePath": remote, "transferId": id])
-            if let index = transfers.firstIndex(where: { $0.id == id }) { transfers[index].state = "completed" }
+            let receipt = try JSONDecoder().decode(TransferReceipt.self, from: await call(method, ["localPath": local, "remotePath": remote, "transferId": id]))
+            if let index = transfers.firstIndex(where: { $0.id == id }) {
+                transfers[index].transferred = receipt.transferred
+                transfers[index].total = receipt.total
+                transfers[index].state = "completed"
+            }
         } catch {
             if let index = transfers.firstIndex(where: { $0.id == id }) {
                 transfers[index].state = "failed"; transfers[index].message = error.localizedDescription
@@ -231,4 +235,5 @@ final class RemoteWorkspace: ObservableObject {
         return alert.runModal() == .alertFirstButtonReturn
     }
     private struct Listing: Decodable { let path: String; let entries: [RemoteEntry] }
+    private struct TransferReceipt: Decodable { let transferred: UInt64; let total: UInt64 }
 }

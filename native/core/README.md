@@ -50,6 +50,8 @@ SFTP `entries` 每项含 `name`、`path`、`isDirectory`、`isSymlink`、`size`�
 
 `stats.sample` 通过独立 SSH exec 通道读取 Linux `/proc`，返回 `supported`、`cpuTotal`、`cpuIdle`（jiffies）、`memTotal`、`memAvailable`（字节）、`rx`、`tx`（排除 loopback 的累积字节）、`load1`。客户端用相邻样本计算 CPU 与网络速率。Darwin 等非 Linux 系统返回 `supported: false`，不伪造零值。命令超时关闭对应 exec 通道；终端继续使用原连接。
 
+Windows 下载会拒绝设备名（例如 `NUL.txt` / `COM1`）、结尾的空格或句点、系统禁止字符，避免设备写入和路径别名导致数据丢失；远端名称仍可浏览和删除。macOS / Linux 保留这些普通名称的行为。[Windows 官方文件命名规则](https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file)
+
 `terminalEngine` 默认为 `false`。SwiftTerm 接收原始输出并维护自己的终端状态；Windows 创建会话时启用 `terminalEngine`，使用 Alacritty 的连续 VT 解析器维护网格、光标、历史、备用屏幕和终端查询响应。
 
 Windows 的 `portable-pty` 适配器使用 `PSEUDOCONSOLE_INHERIT_CURSOR`，因此 ConPTY 启动时会输出 `ESC[6n` 光标位置查询。启用 `terminalEngine` 时核心自动回复；使用原始输出模式的消费者必须连续解析 VT 查询，并通过 `sessions.input` 回复光标位置（初始位置可回复 `ESC[1;1R`），再进行后续操作。只读取字节并忽略查询会阻塞 ConPTY 输出，需要输出的 Windows PTY 测试与 WinUI 应用均启用终端引擎。[CreatePseudoConsole 官方说明](https://learn.microsoft.com/en-us/windows/console/createpseudoconsole)

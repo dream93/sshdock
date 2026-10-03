@@ -106,4 +106,26 @@ final class ConnectionRepositoryTests: XCTestCase {
         XCTAssertEqual(store.selected?.cwd, FileManager.default.homeDirectoryForCurrentUser.path)
         store.selected?.state = .closed
     }
+    @MainActor
+    func testLateTransferProgressCannotReviveCancellationOrEraseFinalReceipt() async throws {
+        let cancelled = RemoteWorkspace(sessionID: "cancelled") { _, _, _ in
+            throw CoreFailure(code: "transfer_cancelled", message: "Cancelled; partial destinations may remain")
+        }
+        await cancelled.transfer(method: "sftp.upload", local: "/fixture", remote: "/fixture", title: "cancelled")
+        let cancelledID = try XCTUnwrap(cancelled.transfers.first?.id)
+        cancelled.consume(CoreEvent(type: "transfer", sessionId: "cancelled", data: nil, exitCode: nil, message: nil,
+                                    transferId: cancelledID, transferred: 6, total: 12, state: "running"))
+        XCTAssertEqual(cancelled.transfers.first?.state, "failed")
+        XCTAssertTrue(cancelled.transfers.first?.message?.contains("Cancelled") == true)
+
+        let completed = RemoteWorkspace(sessionID: "completed") { _, _, _ in Data("{\"transferred\":12,\"total\":12}".utf8) }
+        await completed.transfer(method: "sftp.upload", local: "/fixture", remote: "/fixture", title: "completed")
+        let completedID = try XCTUnwrap(completed.transfers.first?.id)
+        completed.consume(CoreEvent(type: "transfer", sessionId: "completed", data: nil, exitCode: nil, message: nil,
+                                    transferId: completedID, transferred: 6, total: 12, state: "running"))
+        XCTAssertEqual(completed.transfers.first?.state, "completed")
+        XCTAssertEqual(completed.transfers.first?.transferred, 12)
+        XCTAssertEqual(completed.transfers.first?.total, 12)
+        XCTAssertEqual(completed.transfers.first?.fraction, 1)
+    }
 }

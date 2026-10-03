@@ -561,6 +561,18 @@ fn sftp_unicode_recursive_roundtrip_cancel_and_symlink_guards() {
             .len(),
         0
     );
+    #[cfg(windows)]
+    {
+        assert_eq!(
+            request(
+                &core,
+                "sftp.download",
+                json!({"sessionId":id,"localPath":local.path().join("NUL.txt"),"remotePath":"/中文目录/文本.txt","transferId":"device_filename"})
+            )["error"]["code"],
+            "unsafe_filename",
+            "a single-file download must not bypass Windows filename validation"
+        );
+    }
     #[cfg(unix)]
     {
         let outside = tempfile::tempdir().unwrap();

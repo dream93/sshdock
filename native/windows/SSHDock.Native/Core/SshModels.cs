@@ -2,7 +2,7 @@ namespace SSHDock.Native.Core;
 
 public sealed record HostKey(string Fingerprint, string Algorithm);
 public sealed record SftpHome(string Path);
-public sealed record SftpEntry(string Name, string Path, bool IsDirectory, bool IsSymlink, long Size, long? Modified)
+public sealed record SftpEntry(string Name, string Path, bool IsDirectory, bool IsSymlink, ulong Size, long? Modified)
 {
     public string Display => $"{(IsSymlink ? "链接" : IsDirectory ? "文件夹" : "文件")}  {Name}   {(IsDirectory ? "" : FormatBytes(Size))}";
     public static string FormatBytes(double bytes) => bytes < 1024 ? $"{bytes:0} B" : bytes < 1048576 ? $"{bytes / 1024:0.0} KiB" : $"{bytes / 1048576:0.0} MiB";
