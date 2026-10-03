@@ -28,6 +28,7 @@ internal sealed class RemoteToolsWindow : Window
     {
         _coordinator = coordinator; _session = session;
         Title = $"SSHDock · SFTP 与状态 · {session.Title}";
+        AppIcon.Apply(this);
         AppWindow.Resize(new Windows.Graphics.SizeInt32(960, 680));
         var root = new Grid { RequestedTheme = ElementTheme.Dark, Padding = new Thickness(16), RowSpacing = 10,
             Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.ColorHelper.FromArgb(255, 20, 23, 29)) };

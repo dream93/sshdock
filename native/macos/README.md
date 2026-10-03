@@ -15,6 +15,8 @@ open native/artifacts/SSHDockNative.app
 
 脚本默认构建 Release，静态链接 Rust 核心并生成本机架构的 `.app`。本地使用 ad-hoc 签名，未做开发者签名和公证。构建脚本使用 SwiftPM native builder；SwiftTerm 的可选 Metal 渲染未启用，不需要额外的 Metal Toolchain。
 
+应用沿用仓库的 `build/icon.icns`，构建时复制到 `Contents/Resources/AppIcon.icns` 并通过 `CFBundleIconFile` 声明，供 Dock、Finder 和“关于”窗口使用；资源复制后签名并执行严格签名校验。
+
 已有 Rust Release 静态库时，可以单独构建 Swift 部分：
 
 ```bash

@@ -52,6 +52,8 @@ SSHDOCK_CORE_LIBRARY="$PWD/native/core/target/debug/libsshdock_core.dylib" \
 
 测试覆盖按键编码、Unicode 选区、输入字节上限/取消/旧请求确认、短命会话事件重放、shell 工作目录比较与回显拒绝、只迁移元数据与保留 ID、坏 JSON 不覆盖配置、主机密钥变化拒绝、路径安全、Linux 计数差值、ABI 版本、真实本地命令输出、快照解析、resize、关闭事件、并发 poll/释放和重复释放。Windows 还测试凭据管理器 Unicode 写读与删除两种认证凭据。仅运行算法/配置检查可加 `-- --algorithms-only`。
 
+应用继续使用仓库已有的 `build/icon.ico`：`ApplicationIcon` 将其嵌入 EXE，资源管理器使用该图标；同一文件发布为 `Assets/SSHDock.ico`，主窗口、独立终端窗口、SFTP 窗口通过官方 [AppWindow.SetIcon](https://learn.microsoft.com/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.windowing.appwindow.seticon?view=windows-app-sdk-1.8) 设置窗口及任务栏图标。构建脚本检查发布副本与原文件的 SHA256 一致；启动 smoke 实际读取 HWND 的大、小图标句柄，缺失时失败，报告包含 `windowIcon: true`。
+
 Windows 自包含产物还提供真实启动 smoke 模式：
 
 ```powershell

@@ -2,6 +2,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using SSHDock.Native.Controls;
+using SSHDock.Native.Services;
 
 namespace SSHDock.Native;
 
@@ -42,6 +43,7 @@ internal sealed class MainWindow : Window
         _connectionsPane = new ConnectionsPane(this, coordinator);
         HomeWindow = homeWindow;
         Title = "SSHDock Native · SSH 与本地终端";
+        AppIcon.Apply(this);
         AppWindow.Resize(new Windows.Graphics.SizeInt32(1100, 740));
         _shell.Items.Add("系统默认 shell");
         _shell.Items.Add("pwsh.exe");
@@ -246,6 +248,8 @@ internal sealed class MainWindow : Window
             throw new InvalidOperationException($"本地 PTY 返回的目录与请求不一致：请求 {requestedCwd}，会话 {session.Cwd}");
         _startupSmokePhase = "canvas-first-frame";
         await surface.FirstFrame.WaitAsync(cancellationToken);
+        _startupSmokePhase = "window-icon";
+        if (!AppIcon.IsSet(this)) throw new InvalidOperationException("SSHDock 窗口/任务栏图标未设置");
         _startupSmokePhase = "cmd-prompt";
         await WaitForOutputAsync(() => ScreenText(surface.LastRenderedSnapshot)
             .Split('\n').Any(line => line.TrimEnd().EndsWith('>')));
@@ -291,6 +295,7 @@ internal sealed class MainWindow : Window
             phase = _startupSmokePhase, windowStatus = _status.Text,
             requestedCwd = _startupSmokeRequestedCwd, expectedCwd = _startupSmokeExpectedCwd,
             actualCwd = _startupSmokeActualCwd, cwdMatches = _startupSmokeCwdMatches,
+            iconPath = AppIcon.Path, windowIcon = AppIcon.IsSet(this),
             sessionId = session?.Id, sessionStatus = session?.Status, sessionClosed = session?.Closed,
             pendingInput = session?.HasPendingInput,
             canvasFirstFrame = surface?.FirstFrame.IsCompletedSuccessfully,

@@ -54,7 +54,7 @@ public sealed partial class App : Application
                 await _window.RunStartupSmokeAsync(timeout.Token, smokeCwd!);
                 await WriteSmokeReportAsync(new
                 {
-                    ok = true, xamlWindow = true, canvasFirstFrame = true, localPty = true, ptyOutput = true, cwdMatches = true,
+                    ok = true, xamlWindow = true, canvasFirstFrame = true, localPty = true, ptyOutput = true, cwdMatches = true, windowIcon = true,
                     architecture = System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture.ToString(),
                     diagnostics = _window.StartupSmokeDiagnostics()
                 });
@@ -91,6 +91,7 @@ public sealed partial class App : Application
                     Margin = new Thickness(24)
                 }
             };
+            if (File.Exists(Services.AppIcon.Path)) Services.AppIcon.Apply(window);
             window.Activate();
         }
     }

@@ -24,6 +24,12 @@ if ($LASTEXITCODE -ne 0) { throw 'WinUI application build failed' }
 if (-not (Test-Path (Join-Path $outputDirectory 'SSHDock.Native.pri'))) {
     throw 'WinUI application SSHDock.Native.pri was not published; the native XAML controls cannot load their theme resources'
 }
+$publishedIcon = Join-Path $outputDirectory 'Assets/SSHDock.ico'
+$sourceIcon = Join-Path $nativeRoot '../build/icon.ico'
+if (-not (Test-Path $publishedIcon)) { throw 'The original SSHDock window icon was not published' }
+if ((Get-FileHash $publishedIcon -Algorithm SHA256).Hash -ne (Get-FileHash $sourceIcon -Algorithm SHA256).Hash) {
+    throw 'The published window icon does not match the original SSHDock icon'
+}
 Copy-Item "$nativeRoot/core/target/$rustTarget/$profile/sshdock_core.dll" $outputDirectory -Force
 
 if ($RunSmokeTests) {

@@ -23,6 +23,7 @@ app_root="$native_root/artifacts/SSHDockNative.app"
 mkdir -p "$app_root/Contents/MacOS" "$app_root/Contents/Resources"
 cp "$binary_root/SSHDockNative" "$app_root/Contents/MacOS/SSHDockNative"
 cp "$native_root/macos/Info.plist" "$app_root/Contents/Info.plist"
+cp "$native_root/../build/icon.icns" "$app_root/Contents/Resources/AppIcon.icns"
 
 # Keep optional dependency resources in the conventional signed bundle layout.
 # SwiftTerm's Metal renderer is disabled; its shader is not loaded by CoreText.
@@ -35,4 +36,5 @@ for resource_bundle in "$binary_root"/*.bundle; do
   fi
 done
 codesign --force --sign - "$app_root"
+codesign --verify --strict "$app_root"
 echo "Built: $app_root"
