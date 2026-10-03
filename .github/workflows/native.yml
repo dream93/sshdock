@@ -1,0 +1,206 @@
+name: Native
+
+on:
+  pull_request:
+    paths:
+      - 'native/**'
+      - '.github/workflows/native.yml'
+      - 'package.json'
+  push:
+    branches: [main]
+    paths:
+      - 'native/**'
+      - '.github/workflows/native.yml'
+      - 'package.json'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  regression:
+    name: Electron regression
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - run: node --test test/*.test.cjs
+
+  ssh-linux:
+    name: OpenSSH / SFTP / Linux statistics
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d
+        with:
+          toolchain: 1.99.0
+      - run: cargo build --release --locked --manifest-path native/core/Cargo.toml
+      - name: Verify against an isolated OpenSSH server
+        env:
+          SSHDOCK_FIXTURE_PASSWORD: sshdock-disposable-fixture-password
+          SSHDOCK_FIXTURE_PASSPHRASE: sshdock-disposable-fixture-passphrase
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq openssh-server
+          sudo useradd --create-home --user-group --shell /bin/bash sshdocktest
+          printf 'sshdocktest:%s\n' "$SSHDOCK_FIXTURE_PASSWORD" | sudo chpasswd
+          fixture_root=$(mktemp -d /tmp/sshdock-ssh.XXXXXX)
+          chmod 755 "$fixture_root"
+          cleanup_fixture() {
+            if [[ -s "$fixture_root/sshd.pid" ]]; then
+              read -r fixture_pid < "$fixture_root/sshd.pid"
+              sudo kill "$fixture_pid" || true
+            fi
+            sudo rm -rf "$fixture_root"
+          }
+          trap cleanup_fixture EXIT
+          ssh-keygen -q -t ed25519 -N '' -f "$fixture_root/host_key"
+          ssh-keygen -q -t ed25519 -N '' -f "$fixture_root/client_key"
+          cp "$fixture_root/client_key" "$fixture_root/encrypted_client_key"
+          ssh-keygen -q -p -P '' -N "$SSHDOCK_FIXTURE_PASSPHRASE" -f "$fixture_root/encrypted_client_key" >/dev/null
+          cp "$fixture_root/client_key.pub" "$fixture_root/authorized_keys"
+          chmod 644 "$fixture_root/authorized_keys"
+          mkdir "$fixture_root/remote"
+          sudo chown sshdocktest:sshdocktest "$fixture_root/remote"
+          sudo mkdir -p /run/sshd
+          python3 - "$fixture_root" <<'PY'
+          from pathlib import Path
+          import socket, sys
+          root = Path(sys.argv[1])
+          with socket.socket() as listener:
+              listener.bind(('127.0.0.1', 0))
+              port = listener.getsockname()[1]
+          (root / 'port').write_text(str(port))
+          (root / 'sshd_config').write_text(f'''Port {port}
+          ListenAddress 127.0.0.1
+          HostKey {root}/host_key
+          PidFile {root}/sshd.pid
+          AuthorizedKeysFile {root}/authorized_keys
+          StrictModes no
+          PasswordAuthentication yes
+          KbdInteractiveAuthentication no
+          PubkeyAuthentication yes
+          UsePAM no
+          AllowUsers sshdocktest
+          Subsystem sftp internal-sftp
+          ''')
+          PY
+          sudo /usr/sbin/sshd -D -f "$fixture_root/sshd_config" -E "$fixture_root/sshd.log" &
+          python3 - "$fixture_root/port" <<'PY'
+          from pathlib import Path
+          import socket, sys, time
+          port = int(Path(sys.argv[1]).read_text())
+          for attempt in range(100):
+              try:
+                  with socket.create_connection(('127.0.0.1', port), timeout=0.2):
+                      break
+              except OSError:
+                  time.sleep(0.1)
+          else:
+              raise RuntimeError('OpenSSH fixture did not start')
+          PY
+          python3 native/scripts/verify-ssh.py \
+            --library native/core/target/release/libsshdock_core.so \
+            --fixture-directory "$fixture_root" \
+            --port "$(cat "$fixture_root/port")" \
+            --username sshdocktest --platform linux
+
+  macos:
+    name: macOS ${{ matrix.arch }}
+    timeout-minutes: 30
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '13.0'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d
+        with:
+          toolchain: 1.99.0
+          components: rustfmt, clippy
+      - run: cargo fmt --manifest-path native/core/Cargo.toml -- --check
+      - run: cargo clippy --locked --manifest-path native/core/Cargo.toml --all-targets -- -D warnings
+      - run: cargo test --locked --manifest-path native/core/Cargo.toml
+      - run: bash native/scripts/build-macos.sh
+      - run: bash native/scripts/test-macos.sh
+      - name: Archive application
+        run: ditto -c -k --sequesterRsrc --keepParent native/artifacts/SSHDockNative.app native/artifacts/SSHDockNative-macos-${{ matrix.arch }}.zip
+      - uses: actions/upload-artifact@v7
+        with:
+          name: native-macos-${{ matrix.arch }}
+          path: native/artifacts/SSHDockNative-macos-${{ matrix.arch }}.zip
+          if-no-files-found: error
+
+  windows:
+    name: Windows ${{ matrix.arch }}
+    runs-on: windows-2025
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            target: x86_64-pc-windows-msvc
+          - arch: arm64
+            target: aarch64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d
+        with:
+          toolchain: 1.99.0
+          targets: ${{ matrix.target }}
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+      - if: matrix.arch == 'x64'
+        run: cargo test --locked --manifest-path native/core/Cargo.toml
+      - name: Build native application
+        shell: pwsh
+        run: ./native/windows/build.ps1 -Architecture ${{ matrix.arch }} -Configuration Release
+      - name: Verify C# / native ABI
+        if: matrix.arch == 'x64'
+        shell: pwsh
+        run: |
+          $env:SSHDOCK_CORE_LIBRARY = Join-Path $PWD 'native/windows/artifacts/x64/sshdock_core.dll'
+          dotnet run --project native/windows/CoreSmokeTest/CoreSmokeTest.csproj --configuration Release
+          if ($LASTEXITCODE -ne 0) { throw 'C# / native ABI verification failed' }
+      - name: Verify WinUI startup and first terminal frame
+        if: matrix.arch == 'x64'
+        shell: pwsh
+        run: |
+          $app = Join-Path $PWD 'native/windows/artifacts/x64/SSHDock.Native.exe'
+          $report = Join-Path $PWD 'native/windows/artifacts/x64/startup-smoke.json'
+          $arguments = @('--startup-smoke', '--smoke-report', "`"$report`"")
+          $process = Start-Process -FilePath $app -ArgumentList $arguments -WorkingDirectory (Split-Path $app) -PassThru
+          if (-not $process.WaitForExit(45000)) {
+            $process.Kill($true)
+            throw 'WinUI startup verification timed out'
+          }
+          if (Test-Path $report) { Get-Content $report }
+          if ($process.ExitCode -ne 0) { throw "WinUI startup failed with exit code $($process.ExitCode)" }
+          if (-not (Test-Path $report)) { throw 'WinUI startup report is missing' }
+          $result = Get-Content $report -Raw | ConvertFrom-Json
+          if (-not ($result.ok -and $result.xamlWindow -and $result.canvasFirstFrame -and $result.localPty -and $result.ptyOutput -and $result.cwdMatches -and $result.windowIcon)) {
+            throw 'WinUI startup did not verify every required stage'
+          }
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: native-windows-${{ matrix.arch }}
+          path: native/windows/artifacts/${{ matrix.arch }}/
+          if-no-files-found: error

@@ -2,3 +2,10 @@ node_modules
 dist/
 *.log
 .DS_Store
+native/core/target/
+native/macos/.build/
+native/macos/.swiftpm/
+native/windows/**/bin/
+native/windows/**/obj/
+native/windows/artifacts/
+native/artifacts/

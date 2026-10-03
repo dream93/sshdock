@@ -8,6 +8,8 @@
   "private": true,
   "scripts": {
     "test": "node --test test/*.test.cjs",
+    "native:mac": "bash native/scripts/build-macos.sh",
+    "native:core:test": "cargo test --locked --manifest-path native/core/Cargo.toml",
     "postinstall": "node scripts/fix-pty-perms.cjs",
     "start": "electron .",
     "dist": "electron-builder",
