@@ -193,6 +193,7 @@ impl Session {
             "title": self.shared.title,
             "cwd": self.shared.cwd,
             "closed": self.shared.finished.load(Ordering::Acquire),
+            "kind": "local",
         })
     }
 

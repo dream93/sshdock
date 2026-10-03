@@ -27,7 +27,28 @@ extern "C" {
  * output: {"type":"output","sessionId":"...","data":"base64 bytes"}
  * closed: {"type":"closed","sessionId":"...","exitCode":0}
  * error:  {"type":"error","sessionId":"...","code":"...","message":"..."}
+ * transfer: {"type":"transfer","sessionId":"...","transferId":"...",
+ *            "transferred":0,"total":0,"state":"running|completed|failed"}
  * core.info returns {"abiVersion":1,"version":"..."}.
+ * core.shutdown is an idempotent concurrent cancellation barrier: stops owned
+ * processes/connections and wakes output/transfer producers. New operations
+ * return CORE_STOPPED. Call it before waiting for request lanes to drain, then
+ * destroy after all calls have returned. Shutdown does not free the handle.
+ *
+ * ssh.hostKey {host,port} probes algorithm and SHA256 fingerprint without auth.
+ * ssh.connect requires host,port,username,authType (password|key), cols,rows,
+ * expectedFingerprint, optional terminalEngine and password|keyPath/passphrase.
+ * Unknown and changed host keys are never trusted by the core. The frontend
+ * must obtain explicit trust before supplying expectedFingerprint.
+ * SSH sessions reuse sessions.* and terminal.* methods; info contains kind:ssh.
+ * sftp.home/list/mkdir/remove/upload/download/cancel and stats.sample require
+ * sessionId. Network operations never hold the global session-map mutex.
+ * File transfers use localPath,remotePath,transferId, can include directories,
+ * and may be cancelled independently using sftp.cancel {sessionId,transferId}.
+ * Cancelled/failed transfers can leave partial destinations. Symbolic link
+ * transfers are rejected; recursive deletion unlinks links without following.
+ * stats.sample returns Linux CPU counters, byte counts and load, or supported:
+ * false on unsupported systems. Detailed JSON schemas: native/core/README.md.
  * sessions.input accepts a complete write into a bounded queue or returns
  * INPUT_BACKPRESSURE; retry rejected writes after the process consumes input.
  * A successful input request means queued, not necessarily already consumed.

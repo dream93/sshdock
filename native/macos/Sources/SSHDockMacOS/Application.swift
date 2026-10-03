@@ -30,7 +30,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     }
 
     func detach(_ session: TerminalSession) {
-        guard store.sessions.contains(where: { $0 === session }), !store.isClosing(session) else { return }
+        guard !store.isStopping, store.sessions.contains(where: { $0 === session }), !store.isClosing(session) else { return }
         if detachedWindows[session.id] != nil { focusDetached(session); return }
         session.detached = true
         let window = makeWindow(title: "\(session.title) — SSHDock", size: NSSize(width: 920, height: 620))
@@ -54,7 +54,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     }
 
     func commandSession(keyWindow: NSWindow?, mainWindow: NSWindow?, modalWindow: NSWindow? = nil) -> TerminalSession? {
-        guard modalWindow == nil else { return nil }
+        guard modalWindow == nil, !store.isStopping else { return nil }
         for candidate in [keyWindow, mainWindow] {
             var window = candidate
             while let current = window {
@@ -139,16 +139,19 @@ final class ApplicationDelegate: NSObject, NSApplicationDelegate, NSMenuItemVali
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if store.isStopping { return .terminateLater }
         if store.runningCount > 0 {
             let alert = NSAlert()
             alert.messageText = "退出 SSHDock？"
-            alert.informativeText = "退出会结束 \(store.runningCount) 个本地终端及其中运行的任务。"
+            alert.informativeText = "退出会结束 \(store.runningCount) 个终端会话及其中运行的任务，并取消文件传输。"
             alert.addButton(withTitle: "退出")
             alert.addButton(withTitle: "取消")
             if alert.runModal() != .alertFirstButtonReturn { return .terminateCancel }
         }
-        store.stop()
-        return .terminateNow
+        store.beginStop {
+            DispatchQueue.main.async { NSApp.reply(toApplicationShouldTerminate: true) }
+        }
+        return .terminateLater
     }
 
     @objc private func newSession() { windows.showMain(); store.newSession() }

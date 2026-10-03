@@ -97,9 +97,14 @@ internal sealed class SessionRegistrationBuffer
     public static CoreEvent[] Compact(CoreEvent[] batch)
     {
         var outputs = new HashSet<string>();
+        var lastTransfer = new Dictionary<(string?, string?), int>();
+        for (var index = 0; index < batch.Length; index++)
+            if (batch[index].Type == "transfer") lastTransfer[(batch[index].SessionId, batch[index].TransferId)] = index;
         var notifications = new List<CoreEvent>();
-        foreach (var item in batch)
+        for (var index = 0; index < batch.Length; index++)
         {
+            var item = batch[index];
+            if (item.Type == "transfer" && lastTransfer[(item.SessionId, item.TransferId)] != index) continue;
             if (item.Type == "output" && (item.SessionId is null || !outputs.Add(item.SessionId))) continue;
             notifications.Add(item with { Data = null });
         }
@@ -108,6 +113,7 @@ internal sealed class SessionRegistrationBuffer
 
     private static int MetadataBytes(CoreEvent item) =>
         Encoding.UTF8.GetByteCount(item.Type) + Encoding.UTF8.GetByteCount(item.SessionId ?? "") +
-        Encoding.UTF8.GetByteCount(item.Code ?? "") + Encoding.UTF8.GetByteCount(item.Message ?? "");
+        Encoding.UTF8.GetByteCount(item.Code ?? "") + Encoding.UTF8.GetByteCount(item.Message ?? "") +
+        Encoding.UTF8.GetByteCount(item.TransferId ?? "") + Encoding.UTF8.GetByteCount(item.State ?? "");
     private static CoreException Overflow() => new("registration_event_overflow", "创建会话期间的事件缓冲超限，已停止轮询以避免丢失会话状态");
 }

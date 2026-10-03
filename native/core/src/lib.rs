@@ -3,6 +3,7 @@
 mod input;
 mod queue;
 mod session;
+mod ssh;
 mod terminal;
 #[cfg(windows)]
 mod windows_job;
@@ -16,6 +17,8 @@ use std::collections::BTreeMap;
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Mutex};
+use tokio::runtime::Runtime;
+use tokio_util::sync::CancellationToken;
 
 type CoreResult<T> = Result<T, CoreError>;
 
@@ -49,10 +52,85 @@ fn empty_params() -> Value {
     json!({})
 }
 
-#[derive(Default)]
 pub struct Core {
-    sessions: Mutex<BTreeMap<String, Session>>,
+    sessions: Mutex<BTreeMap<String, Arc<ManagedSession>>>,
     queue: Arc<EventQueue>,
+    runtime: Runtime,
+    cancel: CancellationToken,
+}
+
+impl Default for Core {
+    fn default() -> Self {
+        Self {
+            sessions: Mutex::default(),
+            queue: Arc::default(),
+            runtime: tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .thread_name("sshdock-ssh-runtime")
+                .build()
+                .expect("create SSH runtime"),
+            cancel: CancellationToken::new(),
+        }
+    }
+}
+
+enum ManagedSession {
+    Local(Session),
+    Ssh(ssh::SshSession),
+}
+impl ManagedSession {
+    fn id(&self) -> &str {
+        match self {
+            Self::Local(s) => s.id(),
+            Self::Ssh(s) => s.id(),
+        }
+    }
+    fn info(&self) -> Value {
+        match self {
+            Self::Local(s) => s.info(),
+            Self::Ssh(s) => s.info(),
+        }
+    }
+    fn disposable(&self) -> bool {
+        match self {
+            Self::Local(s) => s.disposable(),
+            Self::Ssh(s) => s.disposable(),
+        }
+    }
+    fn input(&self, bytes: &[u8]) -> CoreResult<()> {
+        match self {
+            Self::Local(s) => s.input(bytes),
+            Self::Ssh(s) => s.input(bytes),
+        }
+    }
+    fn resize(&self, cols: u16, rows: u16) -> CoreResult<()> {
+        match self {
+            Self::Local(s) => s.resize(cols, rows),
+            Self::Ssh(s) => s.resize(cols, rows),
+        }
+    }
+    fn close(&self) -> CoreResult<()> {
+        match self {
+            Self::Local(s) => s.close(),
+            Self::Ssh(s) => {
+                s.close();
+                Ok(())
+            }
+        }
+    }
+    fn snapshot(&self) -> CoreResult<Value> {
+        match self {
+            Self::Local(s) => s.snapshot(),
+            Self::Ssh(s) => s.snapshot(),
+        }
+    }
+    fn scroll(&self, delta: Option<i32>) -> CoreResult<()> {
+        match self {
+            Self::Local(s) => s.scroll(delta),
+            Self::Ssh(s) => s.scroll(delta),
+        }
+    }
 }
 
 impl Core {
@@ -74,8 +152,31 @@ impl Core {
         if request.method == "core.info" {
             return Ok(json!({"abiVersion":1,"version":env!("CARGO_PKG_VERSION")}));
         }
-        let mut sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
-        if request.method == "local.create" {
+        if request.method == "core.shutdown" {
+            self.cancel.cancel();
+            self.queue.shutdown();
+            let sessions = self
+                .sessions
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .values()
+                .cloned()
+                .collect::<Vec<_>>();
+            for session in sessions {
+                let _ = session.close();
+            }
+            return Ok(json!({}));
+        }
+        if self.cancel.is_cancelled() {
+            return Err(CoreError::new("CORE_STOPPED", "core has shut down"));
+        }
+        if request.method == "ssh.hostKey" {
+            let params = serde_json::from_value(request.params)
+                .map_err(|e| CoreError::new("invalid_params", e.to_string()))?;
+            return self.runtime.block_on(ssh::host_key(params, &self.cancel));
+        }
+        if request.method == "local.create" || request.method == "ssh.connect" {
+            let mut sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
             // Closed tabs release their terminal history after the final event.
             sessions.retain(|_, session| !session.disposable());
             if sessions.len() >= 32 {
@@ -84,15 +185,36 @@ impl Core {
                     "close an existing session before creating another",
                 ));
             }
-            let params: CreateParams = serde_json::from_value(request.params)
-                .map_err(|e| CoreError::new("invalid_params", e.to_string()))?;
-            let session = Session::create(params, self.queue.clone())?;
+            drop(sessions);
+            let session = if request.method == "local.create" {
+                let params: CreateParams = serde_json::from_value(request.params)
+                    .map_err(|e| CoreError::new("invalid_params", e.to_string()))?;
+                ManagedSession::Local(Session::create(params, self.queue.clone())?)
+            } else {
+                let params = serde_json::from_value(request.params)
+                    .map_err(|e| CoreError::new("invalid_params", e.to_string()))?;
+                ManagedSession::Ssh(self.runtime.block_on(ssh::SshSession::connect(
+                    params,
+                    self.queue.clone(),
+                    self.runtime.handle().clone(),
+                    &self.cancel,
+                ))?)
+            };
             let info = session.info();
-            sessions.insert(session.id().to_owned(), session);
+            let mut sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
+            if sessions.len() >= 32 || self.cancel.is_cancelled() {
+                let _ = session.close();
+                return Err(CoreError::new(
+                    "session_limit",
+                    "core shut down or session limit reached",
+                ));
+            }
+            sessions.insert(session.id().to_owned(), Arc::new(session));
             return Ok(info);
         }
         if request.method == "sessions.list" {
-            return Ok(Value::Array(sessions.values().map(Session::info).collect()));
+            let sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
+            return Ok(Value::Array(sessions.values().map(|s| s.info()).collect()));
         }
         const METHODS: &[&str] = &[
             "sessions.input",
@@ -101,6 +223,14 @@ impl Core {
             "terminal.snapshot",
             "terminal.scroll",
             "terminal.resetScroll",
+            "sftp.home",
+            "sftp.list",
+            "sftp.mkdir",
+            "sftp.remove",
+            "sftp.upload",
+            "sftp.download",
+            "sftp.cancel",
+            "stats.sample",
         ];
         if !METHODS.contains(&request.method.as_str()) {
             return Err(CoreError::new("unknown_method", "unsupported method"));
@@ -108,9 +238,22 @@ impl Core {
         let id = request.params["sessionId"]
             .as_str()
             .ok_or_else(|| CoreError::new("invalid_params", "sessionId must be a string"))?;
-        let session = sessions
+        let session = self
+            .sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
             .get(id)
+            .cloned()
             .ok_or_else(|| CoreError::new("session_not_found", "session does not exist"))?;
+        if request.method.starts_with("sftp.") || request.method == "stats.sample" {
+            return match &*session {
+                ManagedSession::Ssh(s) => s.request(&request.method, &request.params),
+                ManagedSession::Local(_) => Err(CoreError::new(
+                    "ssh_required",
+                    "this operation requires an SSH session",
+                )),
+            };
+        }
         match request.method.as_str() {
             "sessions.input" => {
                 let data = request.params["data"].as_str().ok_or_else(|| {
@@ -154,6 +297,7 @@ impl Drop for Core {
     fn drop(&mut self) {
         // Wake blocked producers before joining sessions; no consumer remains.
         self.queue.shutdown();
+        self.cancel.cancel();
         self.sessions
             .get_mut()
             .unwrap_or_else(|e| e.into_inner())

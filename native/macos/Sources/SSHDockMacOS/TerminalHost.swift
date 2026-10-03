@@ -110,7 +110,7 @@ struct InputQueueBanner: View {
     }
 }
 
-struct MainView: View {
+struct SessionTabsView: View {
     @ObservedObject var store: SessionStore
     var body: some View {
         VStack(spacing: 0) {
@@ -155,7 +155,11 @@ struct MainView: View {
                         Button("移回主窗口") { store.windowCoordinator?.returnToMain(session) }
                     }.frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
-                    TerminalHost(session: session).id(session.id).frame(maxWidth: .infinity, maxHeight: .infinity)
+                    if session.connection != nil {
+                        RemoteSessionView(session: session, presentation: .main).id(session.id)
+                    } else {
+                        TerminalHost(session: session).id(session.id).frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
                 }
             } else {
                 VStack(spacing: 12) {
@@ -182,7 +186,11 @@ struct DetachedView: View {
             }
             Divider()
             InputQueueBanner(queue: session.inputQueue)
-            TerminalHost(session: session, presentation: .detached).frame(maxWidth: .infinity, maxHeight: .infinity)
+            if session.connection != nil {
+                RemoteSessionView(session: session, presentation: .detached)
+            } else {
+                TerminalHost(session: session, presentation: .detached).frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         }.frame(minWidth: 400, maxWidth: .infinity, minHeight: 240, maxHeight: .infinity)
     }
 }

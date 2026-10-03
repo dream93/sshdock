@@ -1,6 +1,7 @@
 use serde_json::Value;
 use std::collections::VecDeque;
 use std::sync::{Condvar, Mutex};
+use std::time::Duration;
 
 const MAX_BYTES: usize = 4 * 1024 * 1024;
 const MAX_EVENTS: usize = 512;
@@ -22,12 +23,23 @@ pub(crate) struct EventQueue {
 
 impl EventQueue {
     pub fn push(&self, event: Value) -> bool {
+        self.push_cancellable(event, || false)
+    }
+
+    pub fn push_cancellable(&self, event: Value, cancelled: impl Fn() -> bool) -> bool {
         let size = event.to_string().len();
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         while !state.shutdown
             && (state.events.len() >= MAX_EVENTS || state.bytes + size > MAX_BYTES)
         {
-            state = self.space.wait(state).unwrap_or_else(|e| e.into_inner());
+            if cancelled() {
+                return false;
+            }
+            state = self
+                .space
+                .wait_timeout(state, Duration::from_millis(100))
+                .unwrap_or_else(|e| e.into_inner())
+                .0;
         }
         if state.shutdown {
             return false;

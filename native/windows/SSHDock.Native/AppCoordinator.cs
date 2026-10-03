@@ -1,5 +1,6 @@
 using Microsoft.UI.Dispatching;
 using SSHDock.Native.Core;
+using SSHDock.Native.Services;
 using System.Text;
 
 namespace SSHDock.Native;
@@ -11,11 +12,15 @@ internal sealed class AppCoordinator
     private readonly CancellationTokenSource _stop = new();
     private readonly Dictionary<string, TerminalSession> _sessions = [];
     private readonly List<MainWindow> _windows = [];
+    private readonly Dictionary<string, RemoteToolsWindow> _remoteTools = [];
     private readonly SessionRegistrationBuffer _earlyEvents = new();
     private readonly Task _pollTask;
     private bool _shuttingDown;
     private int _createsInFlight;
     private string? _pollError;
+    public NativeCoreClient Core => _core;
+    public ConnectionStore Connections { get; } = new();
+    public event Action<CoreEvent>? TransferProgress;
 
     public AppCoordinator(NativeCoreClient core, DispatcherQueue dispatcher)
     {
@@ -33,17 +38,27 @@ internal sealed class AppCoordinator
         return window;
     }
 
-    public async Task<TerminalSession> CreateSessionAsync(string? shell)
+    public Task<TerminalSession> CreateSessionAsync(string? shell) => CreateOwnedSessionAsync(() =>
+        _core.RequestAsync<LocalSession>("local.create", new { cols = 100, rows = 30, shell, terminalEngine = true }));
+
+    public Task<TerminalSession> ConnectSshAsync(ConnectionProfile profile, string password, string passphrase, HostKey key) =>
+        CreateOwnedSessionAsync(() => _core.ConnectionRequestAsync<LocalSession>("ssh.connect", new
+        {
+            host = profile.Host, port = profile.Port, username = profile.Username, authType = profile.AuthType,
+            password = profile.AuthType == "password" ? password : null,
+            keyPath = profile.AuthType == "key" ? Environment.ExpandEnvironmentVariables(profile.KeyPath) : null,
+            passphrase = profile.AuthType == "key" ? passphrase : null,
+            expectedFingerprint = key.Fingerprint, cols = 100, rows = 30, terminalEngine = true
+        }));
+
+    private async Task<TerminalSession> CreateOwnedSessionAsync(Func<Task<LocalSession>> create)
     {
         if (_shuttingDown) throw new InvalidOperationException("应用正在退出");
         if (_createsInFlight >= 32) throw new InvalidOperationException("同时创建的终端已达上限，请稍后重试");
         _createsInFlight++;
         try
         {
-            var created = await _core.RequestAsync<LocalSession>("local.create", new
-            {
-                cols = 100, rows = 30, shell, terminalEngine = true
-            });
+            var created = await create();
             var session = new TerminalSession(_core, created);
             if (_shuttingDown)
             {
@@ -98,6 +113,7 @@ internal sealed class AppCoordinator
         var dirty = new HashSet<string>();
         foreach (var item in events)
         {
+            if (item.Type == "transfer") { TransferProgress?.Invoke(item); continue; }
             if (item.SessionId is null) continue;
             if (!_sessions.TryGetValue(item.SessionId, out var session))
             {
@@ -133,9 +149,20 @@ internal sealed class AppCoordinator
     public async Task CloseSessionAsync(TerminalSession session)
     {
         if (!_sessions.Remove(session.Id)) return;
+        if (_remoteTools.Remove(session.Id, out var tools)) tools.Shutdown();
         session.ReleaseAllViews();
         try { await _core.RequestAsync<System.Text.Json.JsonElement>("sessions.close", new { sessionId = session.Id }); }
         catch (CoreException exception) { session.SetError(exception.Message); }
+    }
+
+    public void OpenRemoteTools(TerminalSession session)
+    {
+        if (!session.IsSsh || session.Closed) throw new InvalidOperationException("请选择已连接的 SSH 终端");
+        if (_remoteTools.TryGetValue(session.Id, out var existing)) { existing.Activate(); return; }
+        var window = new RemoteToolsWindow(this, session);
+        _remoteTools.Add(session.Id, window);
+        window.Closed += (_, _) => _remoteTools.Remove(session.Id);
+        window.Activate();
     }
 
     public async Task AttachCreatedSessionAsync(MainWindow origin, TerminalSession session)
@@ -219,8 +246,9 @@ internal sealed class TerminalSession(NativeCoreClient core, LocalSession create
     public string Id { get; } = created.SessionId;
     public string Title { get; private set; } = created.Title;
     public string Cwd { get; } = created.Cwd;
+    public bool IsSsh { get; } = created.Kind == "ssh";
     public string Status { get; private set; } = "本地终端";
-    public bool Closed { get; private set; }
+    public bool Closed { get; private set; } = created.Closed;
     public TerminalSnapshot? Snapshot { get; private set; }
     public bool HasPendingInput => _pendingInput.Count > 0;
     public event Action? Changed;

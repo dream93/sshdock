@@ -11,6 +11,9 @@ if [[ "$configuration" != "release" && "$configuration" != "debug" ]]; then
   exit 2
 fi
 
+# Match SwiftPM's minimum macOS version for Rust and ring's C/assembly objects.
+export MACOSX_DEPLOYMENT_TARGET=13.0
+
 cargo build --manifest-path "$native_root/core/Cargo.toml" --release --locked
 # The native SwiftPM builder copies SwiftTerm's optional Metal shader source.
 # This prototype uses its CoreText renderer, so no Metal toolchain is required.

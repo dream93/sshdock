@@ -11,6 +11,9 @@ public sealed class NativeCoreClient : IAsyncDisposable
 {
     private readonly CoreHandle _handle = new();
     private readonly SemaphoreSlim _requests = new(1, 1);
+    private readonly SemaphoreSlim _connections = new(1, 1);
+    private readonly SemaphoreSlim _files = new(1, 1);
+    private readonly SemaphoreSlim _stats = new(1, 1);
     private int _disposed;
 
     public static readonly JsonSerializerOptions JsonOptions = new()
@@ -32,10 +35,23 @@ public sealed class NativeCoreClient : IAsyncDisposable
         catch { _handle.Dispose(); throw; }
     }
 
-    public async Task<T> RequestAsync<T>(string method, object parameters,
+    public Task<T> RequestAsync<T>(string method, object parameters,
         CancellationToken cancellationToken = default, Func<bool>? stillValid = null)
+        => RequestOnLaneAsync<T>(_requests, method, parameters, cancellationToken, stillValid);
+
+    public Task<T> ConnectionRequestAsync<T>(string method, object parameters, CancellationToken cancellationToken = default)
+        => RequestOnLaneAsync<T>(_connections, method, parameters, cancellationToken);
+
+    public Task<T> FileRequestAsync<T>(string method, object parameters, CancellationToken cancellationToken = default)
+        => RequestOnLaneAsync<T>(_files, method, parameters, cancellationToken);
+
+    public Task<T> StatsRequestAsync<T>(string method, object parameters, CancellationToken cancellationToken = default)
+        => RequestOnLaneAsync<T>(_stats, method, parameters, cancellationToken);
+
+    private async Task<T> RequestOnLaneAsync<T>(SemaphoreSlim lane, string method, object parameters,
+        CancellationToken cancellationToken, Func<bool>? stillValid = null)
     {
-        await _requests.WaitAsync(cancellationToken).ConfigureAwait(false);
+        await lane.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             ThrowIfDisposed();
@@ -54,7 +70,7 @@ public sealed class NativeCoreClient : IAsyncDisposable
                 return response.GetProperty("result").Deserialize<T>(JsonOptions)!;
             }).ConfigureAwait(false);
         }
-        finally { _requests.Release(); }
+        finally { lane.Release(); }
     }
 
     public Task<CoreEvent[]> PollAsync(CancellationToken cancellationToken = default)
@@ -91,14 +107,29 @@ public sealed class NativeCoreClient : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+        // Shutdown bypasses occupied network/file lanes and cancels native work.
+        // Keep the live SafeHandle until all calls have observed cancellation.
+        Exception? shutdownError = null;
+        try { await Task.Run(() =>
+        {
+            using var response = ReadJson(NativeMethods.Request(_handle, "{\"method\":\"core.shutdown\",\"params\":{}}"));
+        }).ConfigureAwait(false); }
+        catch (Exception exception) { shutdownError = exception; }
         await _requests.WaitAsync().ConfigureAwait(false);
+        await _connections.WaitAsync().ConfigureAwait(false);
+        await _files.WaitAsync().ConfigureAwait(false);
+        await _stats.WaitAsync().ConfigureAwait(false);
         try
         {
             // SafeHandle retains the core during any concurrent poll P/Invoke.
             // ReleaseHandle runs after the last outstanding native call returns.
             await Task.Run(_handle.Dispose).ConfigureAwait(false);
         }
-        finally { _requests.Release(); }
+        finally
+        {
+            _stats.Release(); _files.Release(); _connections.Release(); _requests.Release();
+        }
+        if (shutdownError is not null) throw shutdownError;
     }
 }
 

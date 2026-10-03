@@ -8,6 +8,7 @@ namespace SSHDock.Native;
 internal sealed class MainWindow : Window
 {
     private readonly AppCoordinator _coordinator;
+    private readonly ConnectionsPane _connectionsPane;
     private readonly TabView _tabs = new()
     {
         TabWidthMode = TabViewWidthMode.SizeToContent, IsAddTabButtonVisible = true,
@@ -34,8 +35,9 @@ internal sealed class MainWindow : Window
     public MainWindow(AppCoordinator coordinator, MainWindow? homeWindow = null)
     {
         _coordinator = coordinator;
+        _connectionsPane = new ConnectionsPane(this, coordinator);
         HomeWindow = homeWindow;
-        Title = "SSHDock Native · 本地终端";
+        Title = "SSHDock Native · SSH 与本地终端";
         AppWindow.Resize(new Windows.Graphics.SizeInt32(1100, 740));
         _shell.Items.Add("系统默认 shell");
         _shell.Items.Add("pwsh.exe");
@@ -58,8 +60,14 @@ internal sealed class MainWindow : Window
         retryButton.Click += async (_, _) => { if (SelectedSession is { } session) await session.SendAsync(""); };
         var cancelInputButton = new Button { Content = "取消未发送输入" };
         cancelInputButton.Click += (_, _) => SelectedSession?.CancelPendingInput();
+        var remoteToolsButton = new Button { Content = "SFTP / Linux 状态" };
+        remoteToolsButton.Click += (_, _) =>
+        {
+            try { if (SelectedSession is { } session) _coordinator.OpenRemoteTools(session); }
+            catch (Exception exception) { _status.Text = exception.Message; }
+        };
         var toolbar = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(12, 10, 12, 10) };
-        foreach (var control in new FrameworkElement[] { newButton, _shell, detachButton, returnButton, retryButton, cancelInputButton, _font, _fontSize }) toolbar.Children.Add(control);
+        foreach (var control in new FrameworkElement[] { newButton, _shell, remoteToolsButton, detachButton, returnButton, retryButton, cancelInputButton, _font, _fontSize }) toolbar.Children.Add(control);
 
         _tabs.AddTabButtonClick += async (_, _) => await NewTerminalAsync();
         _tabs.TabCloseRequested += async (_, args) =>
@@ -101,7 +109,12 @@ internal sealed class MainWindow : Window
         root.Children.Add(_tabs);
         Grid.SetRow(_status, 2);
         root.Children.Add(_status);
-        Content = root;
+        var workspace = new Grid { RequestedTheme = ElementTheme.Dark,
+            Background = new SolidColorBrush(Microsoft.UI.ColorHelper.FromArgb(255, 20, 23, 29)) };
+        workspace.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(320) });
+        workspace.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        workspace.Children.Add(_connectionsPane); Grid.SetColumn(root, 1); workspace.Children.Add(root);
+        Content = workspace;
 
         AppWindow.Closing += async (_, args) =>
         {
@@ -166,12 +179,13 @@ internal sealed class MainWindow : Window
     private void UpdateStatus(TerminalSession session)
     {
         var grid = session.Snapshot;
-        _status.Text = $"{session.Status} · {session.Cwd} · {grid?.Cols ?? 100} × {grid?.Rows ?? 30} · Ctrl+Shift+C/V 复制/粘贴" +
+        _status.Text = $"{(session.IsSsh ? "SSH" : "本地")} · {session.Status} · {session.Cwd} · {grid?.Cols ?? 100} × {grid?.Rows ?? 30} · Ctrl+Shift+C/V 复制/粘贴" +
             (grid?.Offset > 0 ? $" · 历史偏移 {grid.Offset}" : "");
     }
 
     public void FinishClose()
     {
+        _connectionsPane.Dispose();
         _allowClose = true;
         Close();
     }
@@ -181,8 +195,8 @@ internal sealed class MainWindow : Window
         var dialog = new ContentDialog
         {
             XamlRoot = ((FrameworkElement)Content).XamlRoot,
-            Title = "结束本地会话并退出？",
-            Content = "最后一个窗口中的 shell 和它们启动的进程将被终止。",
+            Title = "结束会话并退出？",
+            Content = "将终止本地会话、断开 SSH 会话，并取消正在进行的文件传输。",
             PrimaryButtonText = "结束会话并退出",
             CloseButtonText = "取消",
             DefaultButton = ContentDialogButton.Close
@@ -196,12 +210,25 @@ internal sealed class MainWindow : Window
         {
             XamlRoot = ((FrameworkElement)Content).XamlRoot,
             Title = $"结束 {session.Title}？",
-            Content = "此标签中的 shell 和它启动的进程将被终止。",
+            Content = session.IsSsh ? "将断开此 SSH 会话，并取消其文件传输。" : "此标签中的 shell 和它启动的进程将被终止。",
             PrimaryButtonText = "结束会话",
             CloseButtonText = "取消",
             DefaultButton = ContentDialogButton.Close
         };
         return await dialog.ShowAsync() == ContentDialogResult.Primary;
+    }
+
+    internal async Task<ContentDialogResult> ShowConnectionDialogAsync(ContentDialog dialog)
+    {
+        if (IsClosing) return ContentDialogResult.None;
+        if (_dialogOpen) throw new InvalidOperationException("请先关闭当前确认对话框");
+        _dialogOpen = true;
+        try
+        {
+            dialog.XamlRoot = ((FrameworkElement)Content).XamlRoot;
+            return await dialog.ShowAsync();
+        }
+        finally { _dialogOpen = false; }
     }
 
     public async Task RunStartupSmokeAsync(CancellationToken cancellationToken)

@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using SSHDock.Native.Core;
+using SSHDock.Native.Services;
 
 static void Check(bool condition, string message)
 {
@@ -65,9 +66,61 @@ try
 catch (CoreException exception) when (exception.Code == "registration_event_overflow") { }
 Check(registration.Take("bounded").Length == 256, "Rejected metadata append must preserve already retained notifications");
 
+var metadataDirectory = Path.Combine(Path.GetTempPath(), "sshdock-metadata-" + Guid.NewGuid().ToString("N"));
+Directory.CreateDirectory(metadataDirectory);
+try
+{
+    var metadataPath = Path.Combine(metadataDirectory, "native.json");
+    var legacyPath = Path.Combine(metadataDirectory, "legacy.json");
+    File.WriteAllText(legacyPath, """[{"id":"legacy-preserved","name":"server","host":"example.test","port":22,"username":"tester","authType":"password","password":"SECRET_MUST_NOT_MIGRATE","passwordEncoding":"plain","passphrase":"PASSPHRASE_MUST_NOT_MIGRATE"}]""");
+    var store = new ConnectionStore(metadataPath);
+    Check(store.ImportMetadata(legacyPath) == 1 && store.Connections[0].Id == "legacy-preserved", "Metadata migration must preserve the original ID");
+    var saved = File.ReadAllText(metadataPath);
+    Check(!saved.Contains("SECRET_MUST_NOT_MIGRATE") && !saved.Contains("PASSPHRASE_MUST_NOT_MIGRATE") && !saved.Contains("passwordEncoding"), "Secrets and plaintext encodings must never enter native metadata");
+    var profile = store.Connections[0];
+    var key = new HostKey("SHA256:original", "ssh-ed25519"); store.TrustHost(profile, key);
+    saved = File.ReadAllText(metadataPath);
+    try { store.TrustHost(profile, new HostKey("SHA256:changed", "ssh-ed25519")); throw new InvalidOperationException("Changed host key must be rejected"); }
+    catch (InvalidOperationException exception) when (exception.Message != "Changed host key must be rejected") { }
+    Check(store.KnownHost(profile) == key && File.ReadAllText(metadataPath) == saved, "Host key mismatch must preserve existing trust");
+    File.WriteAllText(legacyPath, "not JSON");
+    try { store.ImportMetadata(legacyPath); throw new InvalidOperationException("Invalid legacy metadata must fail"); }
+    catch (JsonException) { }
+    Check(File.ReadAllText(metadataPath) == saved, "Invalid migration must not overwrite current metadata");
+    store.ForgetHost(profile); store.TrustHost(profile, new HostKey("SHA256:changed", "ssh-ed25519"));
+    Check(new ConnectionStore(metadataPath).KnownHost(profile)?.Fingerprint == "SHA256:changed", "Explicit forget and reconfirm must persist new trust");
+}
+finally { Directory.Delete(metadataDirectory, recursive: true); }
+Check(RemoteAlgorithms.JoinPath("/home/test", "new") == "/home/test/new", "Remote path construction");
+var noTimestamp = JsonSerializer.Deserialize<SftpListing>("""{"path":"/home/test","entries":[{"name":"file","path":"/home/test/file","isDirectory":false,"isSymlink":false,"size":5,"modified":null}]}""", NativeCoreClient.JsonOptions);
+Check(noTimestamp is { Entries.Length: 1 } && noTimestamp.Entries[0].Modified is null && noTimestamp.Entries[0].Name == "file", "SFTP entries without mtime must remain browsable");
+var transferBatch = SessionRegistrationBuffer.Compact([
+    new("transfer", "ssh", null, null, null, null, "upload", 10, 100, "running"),
+    new("transfer", "ssh", null, null, null, null, "upload", 100, 100, "completed")]);
+Check(transferBatch.Length == 1 && transferBatch[0].State == "completed", "Transfer UI notifications must retain the latest batch progress");
+try { RemoteAlgorithms.JoinPath("/home/test", "../escape"); throw new InvalidOperationException("Traversal must be rejected"); }
+catch (ArgumentException) { }
+var statsBefore = new LinuxStats(true, 100, 40, 4096, 2048, 1000, 500, 0.5);
+var statsAfter = statsBefore with { CpuTotal = 200, CpuIdle = 65, Rx = 3000 };
+Check(RemoteAlgorithms.CpuPercent(statsBefore, statsAfter) == 75 && RemoteAlgorithms.BytesPerSecond(1000, 3000, 2) == 1000, "Linux CPU and network deltas");
+Check(RemoteAlgorithms.CpuPercent(statsAfter, statsBefore) == 0 && RemoteAlgorithms.BytesPerSecond(3000, 1000, 2) == 0, "Counter resets must not underflow");
+if (OperatingSystem.IsWindows())
+{
+    var credentialId = "test-" + Guid.NewGuid().ToString("N");
+    try
+    {
+        CredentialVault.Save(credentialId, "password", "credential-中文-🧪");
+        CredentialVault.Save(credentialId, "passphrase", "encrypted-key-test");
+        Check(CredentialVault.Read(credentialId, "password") == "credential-中文-🧪", "Windows Credential Manager UTF-8 secret roundtrip");
+        CredentialVault.Delete(credentialId);
+        Check(CredentialVault.Read(credentialId, "password") is null && CredentialVault.Read(credentialId, "passphrase") is null, "Deleting a connection must remove both auth secrets");
+    }
+    finally { CredentialVault.Delete(credentialId); }
+}
+
 if (args.Contains("--algorithms-only"))
 {
-    Console.WriteLine("PASS keyboard encoding, Unicode selection, bounded input/cancel, and creation-event replay");
+    Console.WriteLine("PASS terminal algorithms, metadata-only migration, host key trust, remote path safety, and Linux stats deltas");
     return;
 }
 
@@ -128,4 +181,5 @@ try
     throw new InvalidOperationException("Calls after disposal must fail");
 }
 catch (ObjectDisposedException) { }
-Console.WriteLine("PASS native ABI, local PTY output, terminal snapshot, resize, close, and SafeHandle lifecycle");
+Console.WriteLine("PASS native ABI, executed local command, snapshot/resize/close, lifecycle, metadata migration, host trust, and remote models" +
+    (OperatingSystem.IsWindows() ? ", Windows Credential Manager" : ""));

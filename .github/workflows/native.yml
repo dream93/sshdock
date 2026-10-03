@@ -33,9 +33,91 @@ jobs:
           node-version: 22
       - run: node --test test/*.test.cjs
 
+  ssh-linux:
+    name: OpenSSH / SFTP / Linux statistics
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d
+        with:
+          toolchain: 1.99.0
+      - run: cargo build --release --locked --manifest-path native/core/Cargo.toml
+      - name: Verify against an isolated OpenSSH server
+        env:
+          SSHDOCK_FIXTURE_PASSWORD: sshdock-disposable-fixture-password
+          SSHDOCK_FIXTURE_PASSPHRASE: sshdock-disposable-fixture-passphrase
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq openssh-server
+          sudo useradd --create-home --user-group --shell /bin/bash sshdocktest
+          printf 'sshdocktest:%s\n' "$SSHDOCK_FIXTURE_PASSWORD" | sudo chpasswd
+          fixture_root=$(mktemp -d /tmp/sshdock-ssh.XXXXXX)
+          chmod 755 "$fixture_root"
+          cleanup_fixture() {
+            if [[ -s "$fixture_root/sshd.pid" ]]; then
+              read -r fixture_pid < "$fixture_root/sshd.pid"
+              sudo kill "$fixture_pid" || true
+            fi
+            sudo rm -rf "$fixture_root"
+          }
+          trap cleanup_fixture EXIT
+          ssh-keygen -q -t ed25519 -N '' -f "$fixture_root/host_key"
+          ssh-keygen -q -t ed25519 -N '' -f "$fixture_root/client_key"
+          cp "$fixture_root/client_key" "$fixture_root/encrypted_client_key"
+          ssh-keygen -q -p -P '' -N "$SSHDOCK_FIXTURE_PASSPHRASE" -f "$fixture_root/encrypted_client_key" >/dev/null
+          cp "$fixture_root/client_key.pub" "$fixture_root/authorized_keys"
+          chmod 644 "$fixture_root/authorized_keys"
+          mkdir "$fixture_root/remote"
+          sudo chown sshdocktest:sshdocktest "$fixture_root/remote"
+          sudo mkdir -p /run/sshd
+          python3 - "$fixture_root" <<'PY'
+          from pathlib import Path
+          import socket, sys
+          root = Path(sys.argv[1])
+          with socket.socket() as listener:
+              listener.bind(('127.0.0.1', 0))
+              port = listener.getsockname()[1]
+          (root / 'port').write_text(str(port))
+          (root / 'sshd_config').write_text(f'''Port {port}
+          ListenAddress 127.0.0.1
+          HostKey {root}/host_key
+          PidFile {root}/sshd.pid
+          AuthorizedKeysFile {root}/authorized_keys
+          StrictModes no
+          PasswordAuthentication yes
+          KbdInteractiveAuthentication no
+          PubkeyAuthentication yes
+          UsePAM no
+          AllowUsers sshdocktest
+          Subsystem sftp internal-sftp
+          ''')
+          PY
+          sudo /usr/sbin/sshd -D -f "$fixture_root/sshd_config" -E "$fixture_root/sshd.log" &
+          python3 - "$fixture_root/port" <<'PY'
+          from pathlib import Path
+          import socket, sys, time
+          port = int(Path(sys.argv[1]).read_text())
+          for attempt in range(100):
+              try:
+                  with socket.create_connection(('127.0.0.1', port), timeout=0.2):
+                      break
+              except OSError:
+                  time.sleep(0.1)
+          else:
+              raise RuntimeError('OpenSSH fixture did not start')
+          PY
+          python3 native/scripts/verify-ssh.py \
+            --library native/core/target/release/libsshdock_core.so \
+            --fixture-directory "$fixture_root" \
+            --port "$(cat "$fixture_root/port")" \
+            --username sshdocktest --platform linux
+
   macos:
     name: macOS ${{ matrix.arch }}
-    timeout-minutes: 20
+    timeout-minutes: 30
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '13.0'
     strategy:
       fail-fast: false
       matrix:
@@ -55,7 +137,7 @@ jobs:
       - run: cargo clippy --locked --manifest-path native/core/Cargo.toml --all-targets -- -D warnings
       - run: cargo test --locked --manifest-path native/core/Cargo.toml
       - run: bash native/scripts/build-macos.sh
-      - run: swift test --package-path native/macos --build-system native -c release
+      - run: bash native/scripts/test-macos.sh
       - name: Archive application
         run: ditto -c -k --sequesterRsrc --keepParent native/artifacts/SSHDockNative.app native/artifacts/SSHDockNative-macos-${{ matrix.arch }}.zip
       - uses: actions/upload-artifact@v7
@@ -67,7 +149,7 @@ jobs:
   windows:
     name: Windows ${{ matrix.arch }}
     runs-on: windows-2025
-    timeout-minutes: 20
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:

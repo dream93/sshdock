@@ -13,11 +13,16 @@ struct CoreEvent: Decodable, Sendable {
     let data: String?
     let exitCode: Int?
     let message: String?
+    let transferId: String?
+    let transferred: UInt64?
+    let total: UInt64?
+    let state: String?
 }
 
 /// Requests are FIFO. Polling has its own lane so output draining continues
 /// during input/resize calls. The runtime owns the handle beyond either lane.
 final class CoreBridge: @unchecked Sendable {
+    enum Lane { case terminal, control, files, statistics }
     private let runtime: CoreRuntime
 
     init(eventHandler: @escaping @Sendable ([CoreEvent]) -> Void = { _ in }) {
@@ -30,25 +35,32 @@ final class CoreBridge: @unchecked Sendable {
         runtime = CoreRuntime(eventHandler: deliverEvents)
     }
 
-    func request(_ json: String) async throws -> Data {
+    func request(_ json: String, lane: Lane = .terminal) async throws -> Data {
         try await withCheckedThrowingContinuation { continuation in
-            runtime.submit(json) { continuation.resume(with: $0) }
+            runtime.submit(json, lane: lane) { continuation.resume(with: $0) }
         }
     }
 
     /// Synchronous enqueue preserves keyboard/paste ordering without spawning
     /// unstructured tasks whose scheduling can reorder input.
     func submit(_ json: String, completion: @escaping @Sendable (Result<Data, Error>) -> Void = { _ in }) {
-        runtime.submit(json, completion: completion)
+        runtime.submit(json, lane: .terminal, completion: completion)
     }
 
     func stop() { runtime.stop() }
+    func stopAsync(completion: @escaping @Sendable () -> Void) {
+        DispatchQueue.global(qos: .userInitiated).async { [self] in runtime.stop(); completion() }
+    }
     deinit { runtime.stop() }
 }
 
 private final class CoreRuntime: @unchecked Sendable {
     private let requests = DispatchQueue(label: "com.sshdock.native.requests", qos: .userInitiated)
     private let polling = DispatchQueue(label: "com.sshdock.native.poll", qos: .userInitiated)
+    private let control = DispatchQueue(label: "com.sshdock.native.control", qos: .userInitiated)
+    private let files = DispatchQueue(label: "com.sshdock.native.files", qos: .utility)
+    private let statistics = DispatchQueue(label: "com.sshdock.native.statistics", qos: .utility)
+    private let initialized = DispatchGroup()
     private let laneKey = DispatchSpecificKey<Bool>()
     private let stateLock = NSLock()
     private let stopLock = NSLock()
@@ -63,6 +75,10 @@ private final class CoreRuntime: @unchecked Sendable {
         self.eventHandler = eventHandler
         requests.setSpecific(key: laneKey, value: true)
         polling.setSpecific(key: laneKey, value: true)
+        control.setSpecific(key: laneKey, value: true)
+        files.setSpecific(key: laneKey, value: true)
+        statistics.setSpecific(key: laneKey, value: true)
+        initialized.enter()
         requests.async { [self] in
             stateLock.lock()
             if !stopped {
@@ -82,6 +98,7 @@ private final class CoreRuntime: @unchecked Sendable {
                 }
             }
             stateLock.unlock()
+            initialized.leave()
             polling.async { [self] in
                 guard activeHandle(allowStopping: false) != nil else { return }
                 let pollTimer = DispatchSource.makeTimerSource(queue: polling)
@@ -93,8 +110,11 @@ private final class CoreRuntime: @unchecked Sendable {
         }
     }
 
-    func submit(_ json: String, completion: @escaping @Sendable (Result<Data, Error>) -> Void) {
-        requests.async { [self] in
+    func submit(_ json: String, lane: CoreBridge.Lane, completion: @escaping @Sendable (Result<Data, Error>) -> Void) {
+        let queue: DispatchQueue
+        switch lane { case .terminal: queue = requests; case .control: queue = control; case .files: queue = files; case .statistics: queue = statistics }
+        queue.async { [self] in
+            initialized.wait()
             guard let handle = activeHandle(allowStopping: false) else {
                 stateLock.lock()
                 let failure = initializationFailure ?? CoreFailure(code: "CORE_STOPPED", message: "会话核心已停止")
@@ -134,9 +154,20 @@ private final class CoreRuntime: @unchecked Sendable {
         stopped = true
         stateLock.unlock()
         guard !wasStopped else { return }
+        initialized.wait()
+        stateLock.lock(); let liveHandle = handle; stateLock.unlock()
+        if let liveHandle {
+            // This cancellation call deliberately bypasses busy request lanes.
+            // It wakes transfers and blocked IO before we wait for their barriers.
+            let pointer = "{\"method\":\"core.shutdown\",\"params\":{}}".withCString { sshdock_core_request(liveHandle, $0) }
+            if let pointer { sshdock_core_string_free(pointer) }
+        }
         // Leave polling alive until every request has returned. Only then drain
         // the poll lane and destroy, ensuring neither lane can use a freed handle.
         requests.sync {}
+        control.sync {}
+        files.sync {}
+        statistics.sync {}
         polling.sync {
             timer?.cancel()
             timer = nil
@@ -169,7 +200,7 @@ private final class CoreRuntime: @unchecked Sendable {
             if events.isEmpty { deliverySlots.signal() }
             else { eventHandler(events) { [deliverySlots] in deliverySlots.signal() } }
         } catch {
-            eventHandler([CoreEvent(type: "error", sessionId: nil, data: nil, exitCode: nil, message: error.localizedDescription)]) { [deliverySlots] in deliverySlots.signal() }
+            eventHandler([CoreEvent(type: "error", sessionId: nil, data: nil, exitCode: nil, message: error.localizedDescription, transferId: nil, transferred: nil, total: nil, state: nil)]) { [deliverySlots] in deliverySlots.signal() }
         }
     }
 }
