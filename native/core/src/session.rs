@@ -75,6 +75,8 @@ impl Session {
         if shell.is_empty() {
             return Err(CoreError::new("invalid_params", "shell must not be empty"));
         }
+        #[cfg(windows)]
+        let cwd = shell_cwd(cwd, &shell)?;
         let title = PathBuf::from(&shell)
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
@@ -563,5 +565,120 @@ fn default_shell() -> String {
         std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".into())
     } else {
         std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into())
+    }
+}
+
+#[cfg(windows)]
+fn shell_cwd(mut cwd: PathBuf, shell: &str) -> CoreResult<PathBuf> {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    use std::path::{Component, Path, Prefix};
+
+    // canonicalize returns extended paths on Windows. cmd.exe mistakes even
+    // an ordinary extended drive path for UNC and silently switches directory.
+    // Only simplify local shell paths, and verify both Win32 normalization and
+    // filesystem identity: blindly removing the prefix changes alias semantics.
+    if matches!(
+        cwd.components().next(),
+        Some(Component::Prefix(prefix)) if matches!(prefix.kind(), Prefix::VerbatimDisk(_))
+    ) {
+        let wide: Vec<u16> = cwd.as_os_str().encode_wide().collect();
+        let candidate = PathBuf::from(OsString::from_wide(&wide[4..]));
+        // Windows stores a trailing separator for cwd, in addition to NUL.
+        let stored_units = wide.len() - 4 + usize::from(wide.last() != Some(&u16::from(b'\\')));
+        if stored_units < 260
+            && std::path::absolute(&candidate)
+                .is_ok_and(|absolute| absolute.as_os_str() == candidate.as_os_str())
+            && candidate
+                .canonicalize()
+                .is_ok_and(|canonical| canonical.as_os_str() == cwd.as_os_str())
+        {
+            cwd = candidate;
+        }
+    }
+
+    let is_cmd = Path::new(shell)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| {
+            name.eq_ignore_ascii_case("cmd.exe") || name.eq_ignore_ascii_case("cmd")
+        });
+    if is_cmd
+        && !matches!(
+            cwd.components().next(),
+            Some(Component::Prefix(prefix)) if matches!(prefix.kind(), Prefix::Disk(_))
+        )
+    {
+        return Err(CoreError::new(
+            "cwd_unsupported",
+            "cmd.exe requires a regular drive directory fitting the Windows MAX_PATH cwd limit; choose a compatible shell for UNC or extended paths",
+        ));
+    }
+    Ok(cwd)
+}
+
+#[cfg(all(test, windows))]
+mod cwd_tests {
+    use super::shell_cwd;
+    use std::path::PathBuf;
+
+    #[test]
+    fn unc_and_extended_paths_are_preserved_for_other_shells_and_rejected_for_cmd() {
+        for path in [
+            PathBuf::from(r"\\?\UNC\server\share\directory"),
+            PathBuf::from(r"\\server\share\directory"),
+            PathBuf::from(format!(r"\\?\C:\{}", "a".repeat(260))),
+            PathBuf::from(r"\\?\Volume{00000000-0000-0000-0000-000000000000}\directory"),
+        ] {
+            assert_eq!(shell_cwd(path.clone(), "pwsh.exe").unwrap(), path);
+            for shell in ["cmd", "CMD.EXE", r"C:\Windows\System32\cmd.exe"] {
+                assert_eq!(
+                    shell_cwd(path.clone(), shell).unwrap_err().code,
+                    "cwd_unsupported"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn extended_aliases_keep_their_directory_identity() {
+        use std::os::windows::ffi::OsStrExt;
+
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path().canonicalize().unwrap();
+        let root_units = root.as_os_str().encode_wide().count() - 4;
+        assert!(root_units < 240, "fixture root is unexpectedly long");
+        let long_base = root.join("p".repeat(240 - root_units - 1));
+        std::fs::create_dir(&long_base).unwrap();
+        for base in [&root, &long_base] {
+            for name in ["alias.", "alias ", "NUL.txt"] {
+                let path = base.join(name);
+                std::fs::create_dir(&path).unwrap();
+                // Include a middle component which needs verbatim semantics.
+                for path in [path.clone(), path.join("child")] {
+                    std::fs::create_dir_all(&path).unwrap();
+                    let canonical = path.canonicalize().unwrap();
+                    let compatible = shell_cwd(canonical.clone(), "pwsh.exe").unwrap();
+                    assert_eq!(compatible.canonicalize().unwrap(), canonical);
+                    if path.file_name().unwrap() == "alias."
+                        || path.file_name().unwrap() == "alias "
+                    {
+                        assert_eq!(compatible, canonical);
+                        assert_eq!(
+                            shell_cwd(canonical, "cmd.exe").unwrap_err().code,
+                            "cwd_unsupported"
+                        );
+                    } else {
+                        // Some Windows versions allow otherwise reserved names
+                        // in intermediate components. An accepted cwd must retain
+                        // the selected directory, whatever spelling is used.
+                        match shell_cwd(canonical.clone(), "cmd.exe") {
+                            Ok(path) => assert_eq!(path.canonicalize().unwrap(), canonical),
+                            Err(error) => assert_eq!(error.code, "cwd_unsupported"),
+                        }
+                    }
+                }
+            }
+        }
     }
 }

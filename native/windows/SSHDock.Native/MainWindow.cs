@@ -28,6 +28,10 @@ internal sealed class MainWindow : Window
     public MainWindow? HomeWindow { get; }
     public bool IsClosing => _closing || _allowClose;
     private string _startupSmokePhase = "not-started";
+    private string? _startupSmokeRequestedCwd;
+    private string? _startupSmokeExpectedCwd;
+    private string? _startupSmokeActualCwd;
+    private bool _startupSmokeCwdMatches;
 
     public IEnumerable<TerminalSession> Sessions => _items.Keys;
     private TerminalSession? SelectedSession => _items.FirstOrDefault(pair => ReferenceEquals(pair.Value.Tab, _tabs.SelectedItem)).Key;
@@ -127,13 +131,13 @@ internal sealed class MainWindow : Window
         };
     }
 
-    public async Task NewTerminalAsync(string? forcedShell = null)
+    public async Task NewTerminalAsync(string? forcedShell = null, string? cwd = null)
     {
         if (_closing) return;
         try
         {
             var shell = forcedShell ?? (_shell.SelectedIndex <= 0 ? null : _shell.SelectedItem?.ToString());
-            var session = await _coordinator.CreateSessionAsync(shell);
+            var session = await _coordinator.CreateSessionAsync(shell, cwd);
             await _coordinator.AttachCreatedSessionAsync(this, session);
         }
         catch (Exception exception) { _status.Text = $"创建失败：{exception.Message}"; }
@@ -231,10 +235,15 @@ internal sealed class MainWindow : Window
         finally { _dialogOpen = false; }
     }
 
-    public async Task RunStartupSmokeAsync(CancellationToken cancellationToken)
+    public async Task RunStartupSmokeAsync(CancellationToken cancellationToken, string requestedCwd)
     {
         var session = SelectedSession ?? throw new InvalidOperationException($"本地 PTY 创建失败：{_status.Text}");
         var surface = _items[session].Surface;
+        _startupSmokeRequestedCwd = requestedCwd;
+        _startupSmokeExpectedCwd = session.Cwd;
+        _startupSmokePhase = "session-working-directory";
+        if (!Core.StartupSmokeValidation.WindowsDirectoriesEqual(requestedCwd, session.Cwd))
+            throw new InvalidOperationException($"本地 PTY 返回的目录与请求不一致：请求 {requestedCwd}，会话 {session.Cwd}");
         _startupSmokePhase = "canvas-first-frame";
         await surface.FirstFrame.WaitAsync(cancellationToken);
         _startupSmokePhase = "cmd-prompt";
@@ -245,10 +254,20 @@ internal sealed class MainWindow : Window
         // Use the same CR as the terminal's Enter key, so startup also verifies
         // the production input path rather than a separate command submission form.
         _startupSmokePhase = "command-input";
-        await session.SendAsync("set SSHDOCK_SMOKE_WORD=SMOKE\recho SSHDOCK_UI_%SSHDOCK_SMOKE_WORD%\r");
+        await session.SendAsync("chcp 65001 >nul\rset SSHDOCK_SMOKE_WORD=SMOKE\recho SSHDOCK_UI_%SSHDOCK_SMOKE_WORD%\recho SSHDOCK_CWD_%SSHDOCK_SMOKE_WORD%_BEGIN%CD%SSHDOCK_CWD_%SSHDOCK_SMOKE_WORD%_END\r");
         if (session.HasPendingInput) throw new InvalidOperationException($"smoke 输入未提交：{session.Status}");
         _startupSmokePhase = "command-output";
         await WaitForOutputAsync(() => ScreenText(surface.LastRenderedSnapshot).Contains("SSHDOCK_UI_SMOKE", StringComparison.Ordinal));
+        _startupSmokePhase = "shell-working-directory";
+        await WaitForOutputAsync(() =>
+        {
+            _startupSmokeActualCwd = Core.StartupSmokeValidation.RenderedValue(surface.LastRenderedSnapshot,
+                "SSHDOCK_CWD_SMOKE_BEGIN", "SSHDOCK_CWD_SMOKE_END");
+            return _startupSmokeActualCwd is not null;
+        });
+        _startupSmokeCwdMatches = Core.StartupSmokeValidation.WindowsDirectoriesEqual(session.Cwd, _startupSmokeActualCwd!);
+        if (!_startupSmokeCwdMatches)
+            throw new InvalidOperationException($"cmd 实际工作目录与会话不一致：会话 {session.Cwd}，实际 {_startupSmokeActualCwd}");
         _startupSmokePhase = "complete";
 
         async Task WaitForOutputAsync(Func<bool> completed)
@@ -270,6 +289,8 @@ internal sealed class MainWindow : Window
         return new
         {
             phase = _startupSmokePhase, windowStatus = _status.Text,
+            requestedCwd = _startupSmokeRequestedCwd, expectedCwd = _startupSmokeExpectedCwd,
+            actualCwd = _startupSmokeActualCwd, cwdMatches = _startupSmokeCwdMatches,
             sessionId = session?.Id, sessionStatus = session?.Status, sessionClosed = session?.Closed,
             pendingInput = session?.HasPendingInput,
             canvasFirstFrame = surface?.FirstFrame.IsCompletedSuccessfully,

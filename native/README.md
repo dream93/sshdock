@@ -121,7 +121,8 @@ node --test test/*.test.cjs
 Windows 的 `build.ps1 -RunSmokeTests` 还会运行 C# / Rust 实际桥接检查；
 该检查可在 macOS 指定 `SSHDOCK_CORE_LIBRARY` 为构建后的 `.dylib` 运行。
 Windows x64 CI 还会启动发布后的应用，验证 XAML 窗口、Win2D 终端绘制和实际 shell 输出，
-随后自动关闭会话并退出；输入法、DPI 和完整交互仍由手工检查覆盖。
+并核对 shell 实际目录与包含中文、空格的指定目录一致，随后自动关闭会话并退出；
+输入法、DPI 和完整交互仍由手工检查覆盖。
 macOS 使用 SwiftPM native builder 与 SwiftTerm CoreText 渲染，不要求安装可选 Metal 工具链。
 `test-macos.sh` 启动仅监听本机的临时 OpenSSH 服务，自动运行真实 Swift/SSH/SFTP 桥接测试并清理。
 CI 的 Linux OpenSSH 作业使用临时测试账户，验证密码和加密私钥认证、真实 Linux 统计、递归文件传输、

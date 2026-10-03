@@ -38,8 +38,8 @@ internal sealed class AppCoordinator
         return window;
     }
 
-    public Task<TerminalSession> CreateSessionAsync(string? shell) => CreateOwnedSessionAsync(() =>
-        _core.RequestAsync<LocalSession>("local.create", new { cols = 100, rows = 30, shell, terminalEngine = true }));
+    public Task<TerminalSession> CreateSessionAsync(string? shell, string? cwd = null) => CreateOwnedSessionAsync(() =>
+        _core.RequestAsync<LocalSession>("local.create", new { cols = 100, rows = 30, shell, cwd, terminalEngine = true }));
 
     public Task<TerminalSession> ConnectSshAsync(ConnectionProfile profile, string password, string passphrase, HostKey key) =>
         CreateOwnedSessionAsync(() => _core.ConnectionRequestAsync<LocalSession>("ssh.connect", new

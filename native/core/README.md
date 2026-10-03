@@ -52,6 +52,8 @@ SFTP `entries` 每项含 `name`、`path`、`isDirectory`、`isSymlink`、`size`�
 
 Windows 下载会拒绝设备名（例如 `NUL.txt` / `COM1`）、结尾的空格或句点、系统禁止字符，避免设备写入和路径别名导致数据丢失；远端名称仍可浏览和删除。macOS / Linux 保留这些普通名称的行为。[Windows 官方文件命名规则](https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file)
 
+Windows 本地 shell 的 `cwd` 在解析链接后，将可等价表示的 `\\?\C:\...` 转为普通盘符路径，避免 cmd 将它误认 UNC 并回退到 Windows 目录；普通拼写必须经 Win32 规范化后保持不变，且仍指向同一目录。真实 UNC 和需要 extended 语义的目录为其他 shell 保留。cmd 对这类目录以及超出当前目录长度限制的路径返回 `cwd_unsupported`，不启动错误目录中的会话。该转换仅用于本地 shell。[Rust canonicalize 的兼容性说明](https://doc.rust-lang.org/std/fs/fn.canonicalize.html)、[Windows 当前目录长度限制](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-setcurrentdirectory)
+
 `terminalEngine` 默认为 `false`。SwiftTerm 接收原始输出并维护自己的终端状态；Windows 创建会话时启用 `terminalEngine`，使用 Alacritty 的连续 VT 解析器维护网格、光标、历史、备用屏幕和终端查询响应。
 
 Windows 的 `portable-pty` 适配器使用 `PSEUDOCONSOLE_INHERIT_CURSOR`，因此 ConPTY 启动时会输出 `ESC[6n` 光标位置查询。启用 `terminalEngine` 时核心自动回复；使用原始输出模式的消费者必须连续解析 VT 查询，并通过 `sessions.input` 回复光标位置（初始位置可回复 `ESC[1;1R`），再进行后续操作。只读取字节并忽略查询会阻塞 ConPTY 输出，需要输出的 Windows PTY 测试与 WinUI 应用均启用终端引擎。[CreatePseudoConsole 官方说明](https://learn.microsoft.com/en-us/windows/console/createpseudoconsole)
@@ -74,6 +76,6 @@ Windows 的 `portable-pty` 适配器使用 `PSEUDOCONSOLE_INHERIT_CURSOR`，因�
 
 ## 验证范围
 
-单元测试覆盖跨数据包 UTF-8 / CSI、组合字符与宽字符、颜色属性、备用屏幕、滚动、光标、模式切换、查询响应，以及输入 / 输出队列背压。macOS / Unix 集成测试运行真实 shell 验证中文、VT、PTY 尺寸、退出事件顺序、多会话并发、阻塞 stdin 的关闭、高输出销毁与进程回收。Windows CI 运行 ConPTY 中文、尺寸、退出顺序和阻塞 stdin / 子进程 Job 清理测试。C ABI 测试验证字符串在多次调用和核心销毁后独立存活及参数拒绝行为。
+单元测试覆盖跨数据包 UTF-8 / CSI、组合字符与宽字符、颜色属性、备用屏幕、滚动、光标、模式切换、查询响应，以及输入 / 输出队列背压。macOS / Unix 集成测试运行真实 shell 验证中文、VT、PTY 尺寸、退出事件顺序、多会话并发、阻塞 stdin 的关闭、高输出销毁与进程回收。Windows CI 运行 ConPTY 中文、尺寸、退出顺序、实际 cmd 工作目录（中文、空格、普通与 extended 输入、长度边界）和阻塞 stdin / 子进程 Job 清理测试；目录测试还检查 UNC / extended 保留和 cmd 拒绝。C ABI 测试验证字符串在多次调用和核心销毁后独立存活及参数拒绝行为。
 
 SSH 集成测试使用本机随机端口的加密 SSH / SFTP 服务 fixture，无需安装系统 sshd，覆盖主机指纹拒绝、密码拒绝/成功、加密私钥口令、远程终端输入/尺寸/退出、中文目录与空文件递归传输、链接安全边界、长传输与交互并行、单次取消、满输出自然退出顺序、关闭握手后的 socket EOF。真实系统 shell 行为与 Linux `/proc` 统计由 CI 的隔离 OpenSSH 验收补充；协议 fixture 的固定命令回复不作为真实 shell 执行证据。

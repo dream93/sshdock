@@ -140,6 +140,87 @@ fn protocol_rejects_invalid_sizes_methods_and_base64_before_touching_the_pty() {
 
 #[cfg(windows)]
 #[test]
+fn conpty_cmd_uses_the_selected_directory_for_regular_and_extended_inputs() {
+    use std::os::windows::ffi::OsStrExt;
+    use std::path::{Component, Path, Prefix};
+
+    let root = tempfile::tempdir().unwrap();
+    let canonical_root = root.path().canonicalize().unwrap();
+    let mut directories = vec![
+        canonical_root.join("ordinary cwd with spaces"),
+        canonical_root.join("中文目录 with spaces"),
+    ];
+    // At >=248 units, Rust file APIs may themselves restore the extended
+    // prefix. The shell still needs the equivalent ordinary drive spelling.
+    let root_units = canonical_root.as_os_str().encode_wide().count() - 4;
+    assert!(root_units < 240, "fixture root is unexpectedly long");
+    for length in [250, 258] {
+        directories.push(canonical_root.join("p".repeat(length - root_units - 1)));
+    }
+
+    let core = Core::default();
+    for directory in directories {
+        std::fs::create_dir(&directory).unwrap();
+        let canonical = directory.canonicalize().unwrap();
+        let ordinary = canonical.to_str().unwrap().strip_prefix(r"\\?\").unwrap();
+        for selected in [ordinary, canonical.to_str().unwrap()] {
+            let created = request(
+                &core,
+                "local.create",
+                json!({"cols":400,"rows":24,"cwd":selected,"shell":"cmd.exe","terminalEngine":true}),
+            );
+            let cwd = created["cwd"].as_str().unwrap();
+            assert!(matches!(
+                Path::new(cwd).components().next(),
+                Some(Component::Prefix(prefix)) if matches!(prefix.kind(), Prefix::Disk(_))
+            ));
+            assert_eq!(Path::new(cwd).canonicalize().unwrap(), canonical);
+            let id = created["sessionId"].as_str().unwrap();
+            input(
+                &core,
+                id,
+                b"@echo off\rchcp 65001 >nul\recho SSHDOCK_CWD_%CD%_END\r",
+            );
+            // The command only contains %CD%, so input echo cannot satisfy this.
+            let marker = format!("SSHDOCK_CWD_{cwd}_END");
+            let output = wait_for(&core, id, marker.as_bytes());
+            assert!(!String::from_utf8_lossy(&output).contains("UNC paths are not supported"));
+            input(&core, id, b"exit 0\r");
+            assert_eq!(wait_closed(&core, id), Some(0));
+        }
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn cmd_rejects_an_existing_extended_long_directory_before_spawning() {
+    use std::os::windows::ffi::OsStrExt;
+
+    let root = tempfile::tempdir().unwrap();
+    let core = Core::default();
+    for length in [259, 260, 280] {
+        let mut directory = root.path().canonicalize().unwrap();
+        while length - (directory.as_os_str().encode_wide().count() - 4) - 1 > 200 {
+            directory.push("p".repeat(100));
+        }
+        let units = directory.as_os_str().encode_wide().count() - 4;
+        directory.push("p".repeat(length - units - 1));
+        std::fs::create_dir_all(&directory).unwrap();
+        let result = core.request(
+            &json!({"method":"local.create","params":{"cols":80,"rows":24,"cwd":directory.to_str().unwrap(),"shell":"cmd.exe","terminalEngine":true}}).to_string(),
+        );
+        assert_eq!(result["error"]["code"], "cwd_unsupported", "{result}");
+    }
+    assert!(
+        request(&core, "sessions.list", json!({}))
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[cfg(windows)]
+#[test]
 fn conpty_runs_unicode_resizes_and_orders_shell_exit_after_output() {
     let core = Core::default();
     let id = create(&core, true);

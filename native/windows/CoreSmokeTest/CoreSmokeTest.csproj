@@ -8,6 +8,7 @@
   <ItemGroup>
     <Compile Include="../SSHDock.Native/Core/NativeCoreClient.cs" Link="NativeCoreClient.cs" />
     <Compile Include="../SSHDock.Native/Core/TerminalModels.cs" Link="TerminalModels.cs" />
+    <Compile Include="../SSHDock.Native/Core/StartupSmokeValidation.cs" Link="StartupSmokeValidation.cs" />
     <Compile Include="../SSHDock.Native/Core/TerminalQueues.cs" Link="TerminalQueues.cs" />
     <Compile Include="../SSHDock.Native/Core/SshModels.cs" Link="SshModels.cs" />
     <Compile Include="../SSHDock.Native/Services/ConnectionStore.cs" Link="ConnectionStore.cs" />

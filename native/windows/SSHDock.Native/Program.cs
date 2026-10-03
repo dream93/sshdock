@@ -27,9 +27,10 @@ public sealed partial class App : Application
     {
         var smoke = Environment.GetCommandLineArgs().Contains("--startup-smoke");
         var stage = "xaml-resources";
+        string? smokeCwd = null;
         try
         {
-            // App.xaml activates the SDK's XAML metadata and merged resources.pri pipeline.
+            // App.xaml activates the SDK's XAML metadata and application PRI resource pipeline.
             // Loading it here keeps resource failures inside the startup smoke report.
             InitializeComponent();
             stage = "native-core";
@@ -38,20 +39,27 @@ public sealed partial class App : Application
             stage = "xaml-window";
             _window = _coordinator.OpenWindow();
             _window.Activate();
+            if (smoke)
+            {
+                stage = "smoke-working-directory";
+                smokeCwd = Path.Combine(Path.GetTempPath(), "SSHDock smoke 中文 " + Guid.NewGuid().ToString("N"));
+                Directory.CreateDirectory(smokeCwd);
+            }
             stage = "local-pty";
-            await _window.NewTerminalAsync(smoke ? "cmd.exe" : null);
+            await _window.NewTerminalAsync(smoke ? "cmd.exe" : null, smokeCwd);
             if (smoke)
             {
                 stage = "canvas-and-pty-output";
                 using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
-                await _window.RunStartupSmokeAsync(timeout.Token);
+                await _window.RunStartupSmokeAsync(timeout.Token, smokeCwd!);
                 await WriteSmokeReportAsync(new
                 {
-                    ok = true, xamlWindow = true, canvasFirstFrame = true, localPty = true, ptyOutput = true,
+                    ok = true, xamlWindow = true, canvasFirstFrame = true, localPty = true, ptyOutput = true, cwdMatches = true,
                     architecture = System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture.ToString(),
                     diagnostics = _window.StartupSmokeDiagnostics()
                 });
                 await _coordinator.CloseWindowAsync(_window, confirm: false);
+                DeleteSmokeDirectory(smokeCwd);
                 Environment.Exit(0);
             }
         }
@@ -69,6 +77,7 @@ public sealed partial class App : Application
                     try { await _coordinator.CloseWindowAsync(_window, confirm: false); }
                     catch (Exception closeException) { Console.Error.WriteLine(closeException); }
                 }
+                DeleteSmokeDirectory(smokeCwd);
                 Environment.Exit(1);
                 return;
             }
@@ -84,6 +93,14 @@ public sealed partial class App : Application
             };
             window.Activate();
         }
+    }
+
+    private static void DeleteSmokeDirectory(string? path)
+    {
+        if (path is null) return;
+        try { Directory.Delete(path); }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        { Console.Error.WriteLine($"无法清理启动检查目录：{exception.Message}"); }
     }
 
     private static async Task WriteSmokeReportAsync(object report)

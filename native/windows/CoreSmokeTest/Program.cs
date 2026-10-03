@@ -12,6 +12,15 @@ Check(TerminalAlgorithms.EncodeKey(38, false, false, false) == "\x1b[A", "Normal
 Check(TerminalAlgorithms.EncodeKey(38, false, false, false, true) == "\x1bOA", "Application cursor Up");
 Check(TerminalAlgorithms.EncodeKey(39, true, false, true) == "\x1b[1;6C", "Modified Right");
 Check(TerminalAlgorithms.EncodeKey(65, false, false, false) is null, "Printable text must use IME commit path");
+Check(StartupSmokeValidation.WindowsDirectoriesEqual(@"\\?\C:\Users\测试 folder\", @"c:/users/测试 folder"), "Shell cwd comparison must preserve Unicode and normalize casing, separators, and extended prefixes");
+Check(StartupSmokeValidation.WindowsDirectoriesEqual(@"\\?\UNC\server\share\中文", @"\\server\share\中文\"), "Shell cwd comparison must normalize extended UNC paths");
+Check(!StartupSmokeValidation.WindowsDirectoriesEqual(@"C:\Users\测试 folder", @"C:\Windows"), "cmd directory fallback must fail startup validation");
+var cwdSnapshot = new TerminalSnapshot(10, 4, new(0, 0, true),
+    [new(0, 0, "echo CWD_%MARKER%_BEGIN%CD%CWD_%MARKER%_END", "#ffffff", "#000000", false, false, false),
+     new(1, 0, "CWD_OK_BEGINC:\\测试 ", "#ffffff", "#000000", false, false, false),
+     new(2, 0, "folderCWD_OK_END", "#ffffff", "#000000", false, false, false)], 0, "test");
+Check(StartupSmokeValidation.RenderedValue(cwdSnapshot, "CWD_OK_BEGIN", "CWD_OK_END") == @"C:\测试 folder", "Executed cwd output must survive wrapping without trimming path spaces");
+Check(StartupSmokeValidation.RenderedValue(cwdSnapshot with { Cells = cwdSnapshot.Cells[..1] }, "CWD_OK_BEGIN", "CWD_OK_END") is null, "An echoed cwd command without variable expansion must not pass validation");
 var selectionSnapshot = new TerminalSnapshot(4, 2, new(0, 0, true),
     [new(0, 0, "中", "#ffffff", "#000000", false, false, true),
      new(0, 1, "", "#ffffff", "#000000", false, false, false),
@@ -126,7 +135,7 @@ if (OperatingSystem.IsWindows())
 
 if (args.Contains("--algorithms-only"))
 {
-    Console.WriteLine("PASS terminal algorithms, metadata-only migration, host key trust, remote path safety, and Linux stats deltas");
+    Console.WriteLine("PASS terminal algorithms, shell cwd validation, metadata-only migration, host key trust, remote path safety, and Linux stats deltas");
     return;
 }
 
@@ -187,5 +196,5 @@ try
     throw new InvalidOperationException("Calls after disposal must fail");
 }
 catch (ObjectDisposedException) { }
-Console.WriteLine("PASS native ABI, executed local command, snapshot/resize/close, lifecycle, metadata migration, host trust, and remote models" +
+Console.WriteLine("PASS native ABI, executed local command, snapshot/resize/close, lifecycle, shell cwd validation, metadata migration, host trust, and remote models" +
     (OperatingSystem.IsWindows() ? ", Windows Credential Manager" : ""));

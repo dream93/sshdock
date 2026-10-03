@@ -50,7 +50,7 @@ SSHDOCK_CORE_LIBRARY="$PWD/native/core/target/debug/libsshdock_core.dylib" \
   dotnet run --project native/windows/CoreSmokeTest/CoreSmokeTest.csproj
 ```
 
-测试覆盖按键编码、Unicode 选区、输入字节上限/取消/旧请求确认、短命会话事件重放、只迁移元数据与保留 ID、坏 JSON 不覆盖配置、主机密钥变化拒绝、路径安全、Linux 计数差值、ABI 版本、真实本地命令输出、快照解析、resize、关闭事件、并发 poll/释放和重复释放。Windows 还测试凭据管理器 Unicode 写读与删除两种认证凭据。仅运行算法/配置检查可加 `-- --algorithms-only`。
+测试覆盖按键编码、Unicode 选区、输入字节上限/取消/旧请求确认、短命会话事件重放、shell 工作目录比较与回显拒绝、只迁移元数据与保留 ID、坏 JSON 不覆盖配置、主机密钥变化拒绝、路径安全、Linux 计数差值、ABI 版本、真实本地命令输出、快照解析、resize、关闭事件、并发 poll/释放和重复释放。Windows 还测试凭据管理器 Unicode 写读与删除两种认证凭据。仅运行算法/配置检查可加 `-- --algorithms-only`。
 
 Windows 自包含产物还提供真实启动 smoke 模式：
 
@@ -58,7 +58,7 @@ Windows 自包含产物还提供真实启动 smoke 模式：
 ./native/windows/artifacts/x64/SSHDock.Native.exe --startup-smoke --smoke-report "$PWD/native/windows/artifacts/x64/startup-smoke.json"
 ```
 
-该模式创建真实 XAML 窗口、本地 PTY 和 Win2D 首帧，等待已绘制的 cmd 提示符后，通过与 Enter 一致的 CR 输入命令，再等待 shell 执行变量展开后的测试标记；通过后写入 `ok: true` 的 JSON 报告、自动清理会话并退出 0。失败报告包含阶段、Canvas 实际尺寸、终端行列数、已绘制文本、核心快照文本和会话状态并退出 1，绘制/输出等待限制为 20 秒；CI 还应给整个进程设置超时，捕获应用初始化之前的故障。此模式跳过退出确认，仅用于自动验证，普通启动保留关闭保护。TabView、TabViewItem 和终端内容显式 Stretch，让 Canvas 填满窗口分配的内容区域。
+该模式在包含空格和中文的临时目录创建真实 XAML 窗口、本地 PTY 和 Win2D 首帧，等待已绘制的 cmd 提示符后，通过与 Enter 一致的 CR 输入命令。cmd 切换到 UTF-8，再执行变量展开的测试标记及 `%CD%`；检查实际绘制的工作目录与请求目录、核心返回目录一致，命令回显无法满足这些标记。通过后写入 `ok: true`、`cwdMatches: true` 的 JSON 报告，自动清理会话和临时目录并退出 0。失败报告包含阶段、请求/会话/实际工作目录、Canvas 实际尺寸、终端行列数、已绘制文本、核心快照文本和会话状态并退出 1，绘制/输出等待限制为 20 秒；CI 还应给整个进程设置超时，捕获应用初始化之前的故障。此模式跳过退出确认，仅用于自动验证，普通启动保留关闭保护。TabView、TabViewItem 和终端内容显式 Stretch，让 Canvas 填满窗口分配的内容区域。
 
 `App.xaml` 只负责合并官方 `XamlControlsResources`，窗口和终端继续由 C# 与 Win2D 创建。该应用定义生成 SDK 的 XAML 元数据与应用资源。当前非 MSIX 构建流程生成的合并资源索引为根目录的 `SSHDock.Native.pri`；项目通过 SDK 的 `ProjectPriFullPath` / `ProjectPriFileName` 显式纳入发布，补足上游 [WindowsAppSDK #6720](https://github.com/microsoft/WindowsAppSDK/issues/6720) 的缺项，构建脚本会检查该文件存在。
 
